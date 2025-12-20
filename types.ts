@@ -1,7 +1,9 @@
 
 export interface BookSettings {
-  voice: string; // Voce del narratore
+  voice: string; // Nome voce (Gemini o Sistema)
   speed: number;
+  ambience?: string; // ID dell'audio ambientale (rain, fire, ecc)
+  ambienceVolume?: number; // Volume da 0.0 a 1.0
 }
 
 export interface Book {
@@ -24,10 +26,13 @@ export interface AudioState {
   error: string | null;
 }
 
+export type AudioEngine = 'gemini' | 'system';
+
 export interface AppSettings {
   fontSize: number;
   defaultVoice: string; 
   defaultSpeed: number;
+  engine: AudioEngine; // Nuovo campo
 }
 
 export enum ViewState {
