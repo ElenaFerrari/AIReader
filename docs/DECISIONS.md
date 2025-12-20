@@ -1,39 +1,35 @@
+
 # Architecture Decision Records (ADR)
 
 In questo documento tracciamo le decisioni tecniche importanti e il motivo per cui sono state prese.
 
 ## ADR-001: Utilizzo di Google Gemini 2.5 Flash per il TTS
-*   **Contesto:** Volevamo una qualità audio superiore alle voci robotiche standard, simile a un audiolibro narrato.
 *   **Decisione:** Usare l'endpoint `gemini-2.5-flash-preview-tts`.
-*   **Pro:** Intonazione, comprensione del contesto, gestione dei dialoghi.
-*   **Contro:** Richiede internet, potenziali costi (mitigati dal Free Tier), latenza.
+*   **Motivazione:** Qualità narrativa superiore, intonazione contestuale.
 
 ## ADR-002: Smart Chunking a ~1000 Caratteri
-*   **Contesto:** Gli LLM hanno limiti di token e finestre di contesto. Mandare un libro intero è impossibile e costoso. Mandare frasi singole rende l'audio "scattoso".
-*   **Decisione:** Dividere il testo in blocchi di circa 1000 caratteri (circa 40-60 secondi di audio).
-*   **Motivazione:**
-    1.  Rientra ampiamente nel limite di token per richiesta.
-    2.  È abbastanza lungo da permettere all'AI di avere contesto ed espressività.
-    3.  È abbastanza breve da permettere il download rapido del blocco successivo (buffer) senza interrompere la riproduzione.
-    4.  Mantiene il consumo di API sotto le quote del Free Tier (max 15 richieste/minuto).
+*   **Decisione:** Dividere il testo in blocchi di circa 1000 caratteri.
+*   **Motivazione:** Rispetta i limiti di token, permette bufferizzazione rapida, mantiene costi bassi.
 
 ## ADR-003: Adozione del Sistema Ibrido (Offline Fallback)
-*   **Contesto:** L'utente potrebbe voler leggere in aereo o non voler dipendere dalle quote Google.
-*   **Decisione:** Implementare un'astrazione nel Player che supporta sia `AudioContext` (per l'AI) che `window.speechSynthesis` (per il locale).
-*   **Conseguenze:** Il codice del Player è diventato leggermente più complesso per gestire i due stati asincroni diversi, ma l'app è ora utilizzabile al 100% gratuitamente e offline.
+*   **Decisione:** Supportare sia `AudioContext` (AI) che `window.speechSynthesis` (Sistema).
+*   **Motivazione:** Garantire funzionalità offline e gratuita.
 
 ## ADR-004: LocalStorage per il Database
-*   **Contesto:** Necessità di salvare i libri e i progressi senza implementare un backend complesso.
-*   **Decisione:** Salvare tutto (testo incluso) nel `localStorage` del browser.
-*   **Limiti:** Il LocalStorage ha limiti di spazio (solitamente 5-10MB).
-*   **Futuro:** Se l'utente carica molti libri pesanti, dovremo migrare a `IndexedDB` (es. usando Dexie.js). Per ora, per 5-10 libri di testo, il LocalStorage è sufficiente e molto più veloce da implementare.
+*   **Decisione:** Salvare i metadati e il testo dei libri in `localStorage`.
+*   **Motivazione:** Semplicità di implementazione rispetto a un DB relazionale completo client-side.
 
 ## ADR-005: Caching Audio tramite IndexedDB
-*   **Contesto:** Rigenerare l'audio via AI ogni volta che l'utente riascolta un capitolo è inefficiente e spreca la quota API.
-*   **Problema:** `localStorage` è troppo piccolo per salvare file audio.
-*   **Decisione:** Usare **IndexedDB** per salvare i raw bytes (`Uint8Array`) ricevuti da Gemini.
-*   **Implementazione:**
-    1.  La chiave di cache è una composizione di `BookID + ChunkIndex + Voice + Speed` per garantire unicità.
-    2.  Salviamo il file binario compresso (non l'AudioBuffer decodificato che occuperebbe troppa RAM/spazio).
-    3.  Prima di chiamare l'API, controlliamo sempre se la chiave esiste nel DB.
-*   **Risultato:** "Paghi" la richiesta API solo la prima volta che ascolti un paragrafo.
+*   **Decisione:** Usare **IndexedDB** per salvare i raw bytes (`Uint8Array`) dell'audio voce.
+*   **Motivazione:** `localStorage` è troppo piccolo per l'audio. IndexedDB permette di salvare Blob/ArrayBuffer di grandi dimensioni in modo persistente.
+
+## ADR-006: Elemento HTML5 Audio separato per Ambience
+*   **Contesto:** Necessità di riprodurre suoni di sottofondo in loop (Ambience) contemporaneamente alla voce generata (BufferSource).
+*   **Opzioni:**
+    1.  Mixare tutto dentro `AudioContext` (caricare l'ambience come buffer, creare gain node, mixare).
+    2.  Usare un tag `<audio>` separato gestito da React.
+*   **Decisione:** Opzione 2 (Tag `<audio>` separato).
+*   **Motivazione:**
+    *   **Gestione URL:** L'elemento `<audio>` gestisce nativamente lo streaming da URL remoti (es. Google Sounds, Custom URL) senza dover gestire manualmente scaricamento, decodifica e CORS complessi come richiesto da `AudioContext`.
+    *   **Looping:** L'attributo `loop` nativo è molto affidabile.
+    *   **Indipendenza:** Permette di cambiare la traccia di sottofondo senza dover fermare o ricreare il grafo audio della voce narrante.
