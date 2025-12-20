@@ -1,0 +1,5 @@
+{
+  "name": "AudioLibro AI",
+  "description": "Un lettore di audiolibri intelligente che trasforma i tuoi ebook (ePub, PDF, Docx, TXT) in narrazioni naturali utilizzando Google Gemini 2.5.",
+  "requestFramePermissions": []
+}
