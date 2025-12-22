@@ -4,6 +4,16 @@ const STORE_NAME = 'chunks';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
+// Funzione per richiedere che i dati non vengano cancellati automaticamente dal browser
+export const requestPersistentStorage = async (): Promise<boolean> => {
+  if (navigator.storage && navigator.storage.persist) {
+    const isPersisted = await navigator.storage.persist();
+    console.log(`Storage Persisted: ${isPersisted}`);
+    return isPersisted;
+  }
+  return false;
+};
+
 const openDB = (): Promise<IDBDatabase> => {
   if (dbPromise) return dbPromise;
 

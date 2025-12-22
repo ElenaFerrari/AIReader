@@ -1,7 +1,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { Book as BookType, AppSettings, User, AmbiencePreset } from '../types';
-import { Book, Plus, FileText, Trash2, Sparkles, Settings, X, Wifi, Smartphone, Check, Database, LogOut, Cloud, RefreshCw, HardDrive, Music, Link as LinkIcon, Youtube, ListMusic } from 'lucide-react';
+import { Book, Plus, FileText, Trash2, Sparkles, Settings, X, Wifi, Smartphone, Check, Database, LogOut, Cloud, RefreshCw, HardDrive, Music, Link as LinkIcon, Youtube, ListMusic, Key, Save, FolderUp, Download, Upload } from 'lucide-react';
 import { getCacheSizeInfo } from '../services/storage';
 
 interface LibraryProps {
@@ -16,6 +16,7 @@ interface LibraryProps {
   onChangeCover: (book: BookType, file?: File, autoGenerate?: boolean) => void;
   isProcessing: boolean;
   onClearCache: () => void;
+  onRestoreBackup: (data: any) => void;
 }
 
 const GEMINI_VOICES = [
@@ -26,13 +27,15 @@ const GEMINI_VOICES = [
   { id: 'Charon', name: 'Charon (N)' },
 ];
 
-const Library: React.FC<LibraryProps> = ({ user, books, globalSettings, onUpdateGlobalSettings, onLogout, onSelectBook, onImportBook, onDeleteBook, onChangeCover, isProcessing, onClearCache }) => {
+const Library: React.FC<LibraryProps> = ({ user, books, globalSettings, onUpdateGlobalSettings, onLogout, onSelectBook, onImportBook, onDeleteBook, onChangeCover, isProcessing, onClearCache, onRestoreBackup }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const backupInputRef = useRef<HTMLInputElement>(null);
   const [showGlobalSettings, setShowGlobalSettings] = useState(false);
   const [cacheInfo, setCacheInfo] = useState<string>("Calcolo...");
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success'>('idle');
+  
+  // Stato per la modifica della API Key dentro le impostazioni
+  const [tempApiKey, setTempApiKey] = useState("");
 
-  // Stato per la creazione di nuovi preset
   const [newPresetName, setNewPresetName] = useState("");
   const [newPresetSrc, setNewPresetSrc] = useState("");
   const [newPresetType, setNewPresetType] = useState<'custom' | 'youtube'>('custom');
@@ -40,18 +43,16 @@ const Library: React.FC<LibraryProps> = ({ user, books, globalSettings, onUpdate
   useEffect(() => {
     if (showGlobalSettings) {
         getCacheSizeInfo().then(setCacheInfo);
+        setTempApiKey(localStorage.getItem('gemini_api_key') || "");
     }
   }, [showGlobalSettings]);
 
-  const handleSync = () => {
-      setSyncStatus('syncing');
-      setTimeout(() => {
-          setSyncStatus('success');
-          setTimeout(() => setSyncStatus('idle'), 3000);
-      }, 2500); 
+  const handleUpdateKey = () => {
+      if(tempApiKey.trim().length > 10) {
+          localStorage.setItem('gemini_api_key', tempApiKey.trim());
+          alert("Chiave API aggiornata.");
+      }
   };
-
-  const getProviderName = () => globalSettings.backupProvider === 'onedrive' ? 'OneDrive' : 'Google Drive';
 
   const extractYoutubeId = (url: string) => {
     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
@@ -93,6 +94,43 @@ const Library: React.FC<LibraryProps> = ({ user, books, globalSettings, onUpdate
       onUpdateGlobalSettings({ ...globalSettings, customPresets: updatedPresets });
   };
 
+  const handleExportData = () => {
+      const backupData = {
+          version: 1,
+          date: new Date().toISOString(),
+          settings: globalSettings,
+          books: books
+      };
+      
+      const dataStr = JSON.stringify(backupData);
+      const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+      
+      const exportFileDefaultName = `audiolibro-backup-${new Date().toISOString().slice(0,10)}.json`;
+      
+      const linkElement = document.createElement('a');
+      linkElement.setAttribute('href', dataUri);
+      linkElement.setAttribute('download', exportFileDefaultName);
+      linkElement.click();
+  };
+
+  const handleImportData = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+          try {
+              const json = JSON.parse(event.target?.result as string);
+              onRestoreBackup(json);
+          } catch (err) {
+              alert("Il file non è valido.");
+          }
+      };
+      reader.readAsText(file);
+      // Reset input
+      if (backupInputRef.current) backupInputRef.current.value = "";
+  };
+
   return (
     <div className="flex flex-col h-full bg-gray-50 pb-20 overflow-hidden relative">
       <header className="px-6 pt-12 pb-6 bg-white shadow-sm flex justify-between items-center sticky top-0 z-10">
@@ -103,20 +141,13 @@ const Library: React.FC<LibraryProps> = ({ user, books, globalSettings, onUpdate
                   <div className="w-5 h-5 rounded-full overflow-hidden border border-gray-200">
                       <img src={user.avatar} alt={user.name} className="w-full h-full object-cover"/>
                   </div>
-                  <p className="text-gray-500 text-xs font-medium truncate max-w-[150px]">Ciao, {user.name.split(' ')[0]}</p>
+                  <p className="text-gray-500 text-xs font-medium truncate max-w-[150px]">Pronto a leggere</p>
               </div>
           ) : (
             <p className="text-gray-500 text-xs font-medium">I tuoi audiolibri AI</p>
           )}
         </div>
         <div className="flex gap-2">
-            {user && (
-                <button onClick={handleSync} className={`p-3 bg-blue-50 rounded-full active:scale-90 transition-all flex items-center gap-2 ${syncStatus === 'syncing' ? 'w-auto' : ''}`}>
-                    <RefreshCw size={22} className={`text-blue-500 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
-                    {syncStatus === 'syncing' && <span className="text-[10px] font-bold text-blue-500 pr-2">Sync {getProviderName()}...</span>}
-                    {syncStatus === 'success' && <span className="text-[10px] font-bold text-green-500 pr-2">Backup OK</span>}
-                </button>
-            )}
             <button onClick={() => setShowGlobalSettings(true)} className="p-3 bg-gray-100 rounded-full text-gray-600 active:scale-90 transition-transform">
                 <Settings size={22} />
             </button>
@@ -159,6 +190,43 @@ const Library: React.FC<LibraryProps> = ({ user, books, globalSettings, onUpdate
             </div>
 
             <div className="space-y-8 pb-10 overflow-y-auto flex-1">
+
+              <section className="bg-amber-50 p-6 rounded-3xl border border-amber-100">
+                  <div className="flex items-center gap-2 mb-2 text-amber-700">
+                      <Save size={16}/>
+                      <h4 className="font-bold text-xs uppercase tracking-widest">Dati & Backup Locale</h4>
+                  </div>
+                  <p className="text-[10px] text-amber-600/80 mb-4 leading-relaxed">
+                      L'app salva i dati nella cache del browser, che potrebbe essere cancellata automaticamente dal telefono. 
+                      Per sicurezza, scarica un backup periodico.
+                  </p>
+                  <div className="flex gap-2">
+                      <button onClick={handleExportData} className="flex-1 py-3 bg-white border border-amber-200 text-amber-600 rounded-xl text-xs font-bold shadow-sm flex items-center justify-center gap-2">
+                          <Download size={14} /> Salva Backup
+                      </button>
+                      <button onClick={() => backupInputRef.current?.click()} className="flex-1 py-3 bg-amber-600 text-white rounded-xl text-xs font-bold shadow-sm flex items-center justify-center gap-2">
+                          <Upload size={14} /> Ripristina
+                      </button>
+                      <input type="file" ref={backupInputRef} onChange={handleImportData} accept=".json" className="hidden" />
+                  </div>
+              </section>
+
+              <section className="bg-gray-50 p-6 rounded-3xl">
+                  <div className="flex items-center gap-2 mb-4 text-gray-500">
+                      <Key size={16}/>
+                      <h4 className="font-bold text-xs uppercase tracking-widest">Configurazione API</h4>
+                  </div>
+                  <div className="flex gap-2">
+                      <input 
+                          type="password" 
+                          value={tempApiKey}
+                          onChange={(e) => setTempApiKey(e.target.value)}
+                          placeholder="Gemini API Key"
+                          className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-primary font-mono"
+                      />
+                      <button onClick={handleUpdateKey} className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold text-primary">Salva</button>
+                  </div>
+              </section>
               
               <section className="bg-gray-50 p-6 rounded-3xl">
                   <div className="flex items-center gap-3 mb-4">
@@ -205,34 +273,8 @@ const Library: React.FC<LibraryProps> = ({ user, books, globalSettings, onUpdate
 
               {user && (
                   <section className="bg-blue-50 p-6 rounded-3xl border border-blue-100">
-                      <div className="flex items-center gap-4 mb-4">
-                          <img src={user.avatar} className="w-12 h-12 rounded-full border-2 border-white shadow-sm"/>
-                          <div>
-                              <h3 className="font-bold text-gray-800">{user.name}</h3>
-                              <p className="text-xs text-blue-500 flex items-center gap-1"><Cloud size={12}/> Account Google Connesso</p>
-                          </div>
-                      </div>
-                      
-                      <div className="bg-white/80 rounded-xl p-3 mb-4">
-                        <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest block mb-2">Provider di Backup</label>
-                        <div className="flex gap-2">
-                            <button 
-                                onClick={() => onUpdateGlobalSettings({...globalSettings, backupProvider: 'google'})}
-                                className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-2 ${globalSettings.backupProvider === 'google' ? 'bg-white border-green-500 text-green-600 shadow-sm' : 'border-transparent text-gray-400 hover:bg-white'}`}
-                            >
-                                <HardDrive size={14} /> Google Drive
-                            </button>
-                            <button 
-                                onClick={() => onUpdateGlobalSettings({...globalSettings, backupProvider: 'onedrive'})}
-                                className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-2 ${globalSettings.backupProvider === 'onedrive' ? 'bg-white border-blue-500 text-blue-600 shadow-sm' : 'border-transparent text-gray-400 hover:bg-white'}`}
-                            >
-                                <Cloud size={14} /> OneDrive
-                            </button>
-                        </div>
-                      </div>
-
                       <button onClick={onLogout} className="w-full py-2 bg-white text-gray-600 font-bold text-xs rounded-xl shadow-sm flex items-center justify-center gap-2">
-                          <LogOut size={14}/> Disconnetti
+                          <LogOut size={14}/> Rimuovi Chiave API
                       </button>
                   </section>
               )}

@@ -5,10 +5,10 @@ import Player from './components/Player';
 import Login from './components/Login';
 import { Book, ViewState, AudioState, AppSettings, User } from './types';
 import { parseFile, chunkText } from './services/parser';
-import { generateSpeechForChunk, getAudioContext, generateCoverImage, detectAmbience } from './services/geminiService';
+import { generateSpeechForChunk, generateCoverImage, detectAmbience } from './services/geminiService';
 import { speakSystem, stopSystem } from './services/systemTTS';
-import { saveAudioChunk, getAudioChunk, clearAudioCache, getAllStoredKeys } from './services/storage';
-import { decodeAudioData } from './services/audioUtils';
+import { saveAudioChunk, getAudioChunk, clearAudioCache, getAllStoredKeys, requestPersistentStorage } from './services/storage';
+import { createWavFile } from './services/audioUtils';
 import { Loader2, Palette, AlertCircle, X } from 'lucide-react';
 
 const DEFAULT_GLOBAL_SETTINGS: AppSettings = {
@@ -17,7 +17,7 @@ const DEFAULT_GLOBAL_SETTINGS: AppSettings = {
   defaultSpeed: 1.0,
   engine: 'gemini',
   backupProvider: 'google',
-  customPresets: [] // Inizializza array vuoto
+  customPresets: [] 
 };
 
 // Mappa URL suoni predefiniti
@@ -32,7 +32,7 @@ const AMBIENCE_PRESETS: Record<string, string> = {
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
-  const [view, setView] = useState<ViewState>(ViewState.LOGIN); // Start at LOGIN
+  const [view, setView] = useState<ViewState>(ViewState.LOGIN);
   
   const [books, setBooks] = useState<Book[]>([]);
   const [activeBook, setActiveBook] = useState<Book | null>(null);
@@ -55,41 +55,61 @@ const App: React.FC = () => {
     error: null,
   });
 
-  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  // NUOVO PLAYER NATIVO
+  const voicePlayerRef = useRef<HTMLAudioElement | null>(null);
+  const currentBlobUrlRef = useRef<string | null>(null);
+  
   const playbackIdRef = useRef<number>(0);
-  const audioCache = useRef<Map<string, AudioBuffer>>(new Map());
-  const fetchPromises = useRef<Map<string, Promise<AudioBuffer>>>(new Map());
+  const fetchPromises = useRef<Map<string, Promise<Uint8Array>>>(new Map());
   
   const ambienceRef = useRef<HTMLAudioElement | null>(null);
-  const youtubePlayerRef = useRef<any>(null); // Ref per iframe youtube
 
-  // --- AUTH CHECK ---
+  // --- PERSISTENZA E INIZIALIZZAZIONE ---
   useEffect(() => {
-      const savedUser = localStorage.getItem('audiolibro_user');
-      if (savedUser) {
-          setUser(JSON.parse(savedUser));
-          setView(ViewState.LIBRARY);
-      }
+      const init = async () => {
+          try {
+              // 1. Richiedi persistenza dati al browser
+              const persisted = await requestPersistentStorage().catch(() => false);
+              if(persisted) console.log("Storage persistente attivato");
+              
+              // 2. Check API Key
+              const savedKey = localStorage.getItem('gemini_api_key');
+              if (savedKey) {
+                  const localUser: User = {
+                      id: 'local-user',
+                      name: 'Lettore',
+                      email: 'local@device',
+                      avatar: 'https://ui-avatars.com/api/?name=Lettore&background=0D8ABC&color=fff',
+                      isPremium: true
+                  };
+                  setUser(localUser);
+                  setView(ViewState.LIBRARY);
+              }
+          } catch (e) {
+              console.error("Errore inizializzazione:", e);
+          }
+      };
+      init();
   }, []);
 
-  const handleLogin = () => {
-      // Simulazione Login Google
-      const mockUser: User = {
-          id: 'google-123456',
-          name: 'Mario Rossi',
-          email: 'mario.rossi@gmail.com',
-          avatar: 'https://ui-avatars.com/api/?name=Mario+Rossi&background=0D8ABC&color=fff',
+  const handleKeySetup = () => {
+      const localUser: User = {
+          id: 'local-user',
+          name: 'Lettore',
+          email: 'local@device',
+          avatar: 'https://ui-avatars.com/api/?name=Lettore&background=0D8ABC&color=fff',
           isPremium: true
       };
-      localStorage.setItem('audiolibro_user', JSON.stringify(mockUser));
-      setUser(mockUser);
+      setUser(localUser);
       setView(ViewState.LIBRARY);
   };
 
   const handleLogout = () => {
-      localStorage.removeItem('audiolibro_user');
-      setUser(null);
-      setView(ViewState.LOGIN);
+      if(confirm("Vuoi rimuovere la chiave API salvata?")) {
+          localStorage.removeItem('gemini_api_key');
+          setUser(null);
+          setView(ViewState.LOGIN);
+      }
   };
 
   useEffect(() => {
@@ -128,7 +148,6 @@ const App: React.FC = () => {
     const ambienceVal = activeBook.settings?.ambience || 'none';
     const volume = activeBook.settings?.ambienceVolume ?? 0.2;
 
-    // 1. GESTIONE HTML5 AUDIO (Preset / Custom URL / Custom Playlist)
     if (ambienceRef.current) {
         ambienceRef.current.volume = volume;
         
@@ -149,19 +168,13 @@ const App: React.FC = () => {
                 ambienceRef.current.pause();
             }
         } else {
-             // Se è youtube, stoppa HTML5
              ambienceRef.current.pause();
         }
     }
-
-    // 2. GESTIONE YOUTUBE
-    // La logica YouTube è gestita principalmente dentro Player.tsx via props, 
-    // ma qui gestiamo lo stato globale se necessario.
-    
   }, [activeBook?.settings?.ambience, activeBook?.settings?.ambienceType, activeBook?.settings?.ambienceVolume, audioState.isPlaying, audioState.isLoading]);
 
 
-  // --- MEDIA SESSION ---
+  // --- MEDIA SESSION & LOCK SCREEN CONTROLS ---
   useEffect(() => {
     if ('mediaSession' in navigator && activeBook) {
       navigator.mediaSession.metadata = new MediaMetadata({
@@ -169,14 +182,19 @@ const App: React.FC = () => {
         artist: activeBook.author,
         artwork: activeBook.coverUrl ? [{ src: activeBook.coverUrl, sizes: '512x512', type: 'image/png' }] : undefined
       });
+      
+      // I controlli chiamano le funzioni wrapper che gestiscono la logica
       navigator.mediaSession.setActionHandler('play', () => !audioState.isPlaying && playChunk(audioState.currentChunkIndex, activeBook));
       navigator.mediaSession.setActionHandler('pause', () => stopAudio());
-      navigator.mediaSession.setActionHandler('previoustrack', () => audioState.currentChunkIndex > 0 && playChunk(audioState.currentChunkIndex - 1, activeBook));
-      navigator.mediaSession.setActionHandler('nexttrack', () => audioState.currentChunkIndex < activeBook.chunks.length - 1 && playChunk(audioState.currentChunkIndex + 1, activeBook));
+      navigator.mediaSession.setActionHandler('previoustrack', () => {
+          if (audioState.currentChunkIndex > 0) playChunk(audioState.currentChunkIndex - 1, activeBook);
+      });
+      navigator.mediaSession.setActionHandler('nexttrack', () => {
+          if (audioState.currentChunkIndex < activeBook.chunks.length - 1) playChunk(audioState.currentChunkIndex + 1, activeBook);
+      });
     }
     return () => {
         if ('mediaSession' in navigator) {
-             // Cleanup handlers
              ['play','pause','previoustrack','nexttrack'].forEach(a => navigator.mediaSession.setActionHandler(a as any, null));
         }
     }
@@ -185,31 +203,29 @@ const App: React.FC = () => {
   const stopAudio = useCallback(() => {
     playbackIdRef.current += 1; 
     
-    if (audioSourceRef.current) {
-      try { audioSourceRef.current.onended = null; audioSourceRef.current.stop(); } catch (e) {}
-      audioSourceRef.current = null;
+    // Ferma il player nativo
+    if (voicePlayerRef.current) {
+        voicePlayerRef.current.pause();
+        // Non resettiamo src immediatamente per evitare glitch UI
     }
     stopSystem();
     setAudioState(prev => ({ ...prev, isPlaying: false, isLoading: false }));
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = "paused";
   }, []);
 
-  const getOrFetchAudio = async (chunkHtml: string, key: string, voice: string, speed: number, style: string): Promise<AudioBuffer> => {
-    if (audioCache.current.has(key)) return audioCache.current.get(key)!;
-    
+  // Recupera i RAW BYTES dell'audio (Uint8Array)
+  const getOrFetchRawAudio = async (chunkHtml: string, key: string, voice: string, speed: number, style: string): Promise<Uint8Array> => {
     const cachedRaw = await getAudioChunk(key);
-    if (cachedRaw) {
-       const ctx = getAudioContext();
-       const buffer = await decodeAudioData(cachedRaw, ctx, 24000, 1);
-       audioCache.current.set(key, buffer); 
-       return buffer;
-    }
+    if (cachedRaw) return cachedRaw;
 
+    // Genera via API
     const result = await generateSpeechForChunk(chunkHtml, voice, speed, style);
+    
+    // Salva in cache
     await saveAudioChunk(key, result.rawData); 
     setCachedKeys(prev => new Set(prev).add(key));
-    audioCache.current.set(key, result.audioBuffer);
-    return result.audioBuffer;
+    
+    return result.rawData;
   };
 
   const preloadNextChunk = useCallback(async (index: number, book: Book) => {
@@ -222,12 +238,12 @@ const App: React.FC = () => {
     const bookId = book.id;
     const key = `${bookId}_${nextIndex}_${voice}_${speed}_${style}`;
 
-    if (!audioCache.current.has(key) && !fetchPromises.current.has(key)) {
-      const promise = getOrFetchAudio(book.chunks[nextIndex], key, voice, speed, style);
+    if (!cachedKeys.has(key) && !fetchPromises.current.has(key)) {
+      const promise = getOrFetchRawAudio(book.chunks[nextIndex], key, voice, speed, style);
       fetchPromises.current.set(key, promise);
       try { await promise; } catch (e) {} finally { fetchPromises.current.delete(key); }
     }
-  }, [globalSettings]);
+  }, [globalSettings, cachedKeys]);
 
   const handleDownloadChapter = async (startIndex: number, endIndex: number) => {
       if (!activeBook || globalSettings.engine !== 'gemini') return;
@@ -250,7 +266,7 @@ const App: React.FC = () => {
                   continue;
               }
               if (!fetchPromises.current.has(key)) {
-                  const promise = getOrFetchAudio(activeBook.chunks[i], key, voice, speed, style);
+                  const promise = getOrFetchRawAudio(activeBook.chunks[i], key, voice, speed, style);
                   fetchPromises.current.set(key, promise);
                   await promise;
                   fetchPromises.current.delete(key);
@@ -289,9 +305,12 @@ const App: React.FC = () => {
     const book = targetBook || activeBook;
     if (!book) return;
     
-    stopAudio(); 
+    // Non chiamiamo stopAudio() completo per evitare di resettare l'UI, ma mettiamo in pausa il player
+    playbackIdRef.current += 1;
     const currentPlaybackId = playbackIdRef.current;
     
+    if (voicePlayerRef.current) voicePlayerRef.current.pause();
+
     setAudioState(prev => ({ ...prev, currentChunkIndex: index, isLoading: true, error: null, isPlaying: true }));
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = "playing";
 
@@ -300,6 +319,7 @@ const App: React.FC = () => {
     const speed = book.settings?.speed || globalSettings.defaultSpeed;
     const style = book.settings?.voiceStyle || 'Narrative';
 
+    // SISTEMA TTS NATIVO
     if (currentEngine === 'system') {
       try {
         setAudioState(prev => ({ ...prev, isLoading: false }));
@@ -315,41 +335,48 @@ const App: React.FC = () => {
       return;
     }
 
+    // GEMINI AI (Player Nativo HTML5)
     try {
-      const ctx = getAudioContext();
-      if (ctx.state === 'suspended') await ctx.resume();
-      
       const chunkHTML = book.chunks[index];
       const key = `${book.id}_${index}_${voice}_${speed}_${style}`;
 
-      if (currentPlaybackId !== playbackIdRef.current) return;
-
-      let audioBuffer: AudioBuffer;
+      let rawData: Uint8Array;
+      
       if (fetchPromises.current.has(key)) {
-        audioBuffer = await fetchPromises.current.get(key)!;
+        rawData = await fetchPromises.current.get(key)!;
       } else {
-        const promise = getOrFetchAudio(chunkHTML, key, voice, speed, style);
+        const promise = getOrFetchRawAudio(chunkHTML, key, voice, speed, style);
         fetchPromises.current.set(key, promise);
-        audioBuffer = await promise;
+        rawData = await promise;
         fetchPromises.current.delete(key);
       }
 
       if (currentPlaybackId !== playbackIdRef.current) return;
 
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(ctx.destination);
-      source.onended = () => { if (currentPlaybackId === playbackIdRef.current) handleNextChunk(); };
-      audioSourceRef.current = source;
-      source.start(0);
-      
-      setAudioState(prev => ({ ...prev, isLoading: false }));
-      setBooks(prev => prev.map(b => b.id === book.id ? { ...b, progressIndex: index } : b));
-      preloadNextChunk(index, book);
+      // Conversione RAW -> WAV -> Blob URL per il tag <audio>
+      if (currentBlobUrlRef.current) URL.revokeObjectURL(currentBlobUrlRef.current);
+      const wavBlob = createWavFile(rawData, 24000); // Assumiamo 24k come da API Gemini
+      const blobUrl = URL.createObjectURL(wavBlob);
+      currentBlobUrlRef.current = blobUrl;
+
+      if (voicePlayerRef.current) {
+          voicePlayerRef.current.src = blobUrl;
+          // Importante per il background play
+          voicePlayerRef.current.play()
+            .then(() => {
+                setAudioState(prev => ({ ...prev, isLoading: false }));
+                setBooks(prev => prev.map(b => b.id === book.id ? { ...b, progressIndex: index } : b));
+                preloadNextChunk(index, book);
+            })
+            .catch(e => {
+                console.error("Play error", e);
+                setAudioState(prev => ({ ...prev, isPlaying: false, error: "Impossibile riprodurre audio." }));
+            });
+      }
 
     } catch (err: any) {
       if (currentPlaybackId === playbackIdRef.current) {
-        setAudioState(prev => ({ ...prev, isLoading: false, isPlaying: false, error: "Errore Audio/Rete." }));
+        setAudioState(prev => ({ ...prev, isLoading: false, isPlaying: false, error: err.message || "Errore Audio/Rete." }));
         if (err?.message?.includes('429')) setTimeout(() => playChunk(index, book), 3500);
       }
     }
@@ -373,20 +400,50 @@ const App: React.FC = () => {
     if (nextIndex < activeBook.chunks.length) playChunk(nextIndex); else stopAudio();
   }, [activeBook, audioState.currentChunkIndex, globalSettings.engine]);
 
+  const handleVoiceEnded = () => {
+      // Evento onEnded del tag <audio>
+      handleNextChunk();
+  };
+
   const handleClearCache = async () => {
     if(confirm("Svuotare la cache audio?")) {
       await clearAudioCache();
-      audioCache.current.clear();
+      fetchPromises.current.clear();
       setCachedKeys(new Set());
     }
   };
 
+  const handleRestoreBackup = (backupData: any) => {
+    try {
+      if (!backupData.books || !Array.isArray(backupData.books)) throw new Error("Formato non valido");
+      
+      if (confirm(`Trovati ${backupData.books.length} libri nel backup del ${backupData.date}. Vuoi sovrascrivere la libreria attuale?`)) {
+        setBooks(backupData.books);
+        if (backupData.settings) {
+          setGlobalSettings(prev => ({...prev, ...backupData.settings}));
+        }
+        alert("Ripristino completato con successo!");
+      }
+    } catch (e) {
+      alert("Errore nel file di backup.");
+    }
+  };
+
   if (view === ViewState.LOGIN) {
-      return <Login onLogin={handleLogin} />;
+      return <Login onLogin={handleKeySetup} />;
   }
 
   return (
     <>
+      {/* PLAYER NATIVO PER LA VOCE */}
+      <audio 
+        ref={voicePlayerRef} 
+        onEnded={handleVoiceEnded}
+        onError={(e) => console.error("Voice Error", e)}
+        className="hidden" // Nascosto, ma presente nel DOM per gestione Lock Screen
+      />
+      
+      {/* PLAYER AMBIENCE */}
       <audio ref={ambienceRef} loop crossOrigin="anonymous" className="hidden" onError={(e) => console.error("Ambience Error:", e.currentTarget.error)} />
 
       {view === ViewState.PLAYER && activeBook ? (
@@ -406,7 +463,8 @@ const App: React.FC = () => {
             const updated = { ...activeBook, settings: s };
             setActiveBook(updated);
             setBooks(prev => prev.map(b => b.id === activeBook.id ? updated : b));
-            if (globalSettings.engine === 'gemini') audioCache.current.clear();
+            // Non cancelliamo la cache globale, solo le promesse in volo
+            fetchPromises.current.clear();
           }}
           onUpdateGlobalSettings={setGlobalSettings}
           onBack={() => { stopAudio(); setView(ViewState.LIBRARY); }}
@@ -423,7 +481,7 @@ const App: React.FC = () => {
           onUpdateGlobalSettings={setGlobalSettings}
           onLogout={handleLogout}
           onSelectBook={(b) => {
-            stopAudio(); audioCache.current.clear(); fetchPromises.current.clear();
+            stopAudio(); fetchPromises.current.clear();
             setActiveBook(b); 
             setAudioState({ isPlaying: false, isLoading: false, currentChunkIndex: b.progressIndex, error: null });
             refreshCachedKeys();
@@ -463,6 +521,7 @@ const App: React.FC = () => {
           }}
           isProcessing={isProcessingFile}
           onClearCache={handleClearCache}
+          onRestoreBackup={handleRestoreBackup}
         />
       )}
 

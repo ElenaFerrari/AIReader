@@ -1,7 +1,15 @@
+
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { decodeBase64, decodeAudioData } from "./audioUtils";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Funzione helper per ottenere l'istanza AI con la chiave dinamica
+const getAIClient = () => {
+  const storedKey = localStorage.getItem('gemini_api_key');
+  if (!storedKey) {
+    throw new Error("API_KEY_MISSING");
+  }
+  return new GoogleGenAI({ apiKey: storedKey });
+};
 
 let audioContext: AudioContext | null = null;
 
@@ -18,6 +26,9 @@ async function apiCallWithRetry<T>(fn: () => Promise<T>, retries = 3, delay = 20
   try {
     return await fn();
   } catch (error: any) {
+    // Se manca la chiave, non ritentare, lancia subito errore
+    if (error.message === "API_KEY_MISSING") throw new Error("API Key mancante. Inseriscila nelle impostazioni.");
+
     const isQuotaError = error?.message?.includes('429') || error?.status === 429;
     if (retries > 0 && isQuotaError) {
       await new Promise(resolve => setTimeout(resolve, delay));
@@ -39,15 +50,13 @@ export const generateSpeechForChunk = async (
   htmlContent: string, 
   voice: string = 'Kore',
   speed: number = 1.0,
-  style: string = 'Narrative' // Default style
+  style: string = 'Narrative' 
 ): Promise<GeneratedAudio> => {
-  if (!process.env.API_KEY) throw new Error("API Key missing");
-
+  
   const parser = new DOMParser();
   const doc = parser.parseFromString(htmlContent, 'text/html');
   const text = doc.body.textContent || "";
 
-  // Mapping degli stili in istruzioni per il prompt
   const styleInstructions: Record<string, string> = {
     'Narrative': 'Tono naturale, equilibrato e professionale da audiolibro classico.',
     'Whisper': 'Tono basso, quasi sussurrato, intimo e misterioso. Perfetto per scene di tensione o notturne.',
@@ -58,7 +67,6 @@ export const generateSpeechForChunk = async (
 
   const selectedStyleInstruction = styleInstructions[style] || styleInstructions['Narrative'];
 
-  // Prompt ottimizzato con supporto stile
   const prompt = `
     Sei un narratore di audiolibri italiano di altissimo livello.
     
@@ -77,6 +85,7 @@ export const generateSpeechForChunk = async (
   `;
 
   return apiCallWithRetry(async () => {
+    const ai = getAIClient();
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
       contents: [{ parts: [{ text: prompt }] }],
@@ -102,8 +111,8 @@ export const generateSpeechForChunk = async (
 };
 
 export const generateCoverImage = async (bookTitle: string): Promise<string> => {
-  if (!process.env.API_KEY) throw new Error("API Key missing");
   return apiCallWithRetry(async () => {
+    const ai = getAIClient();
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
       contents: { parts: [{ text: `High quality book cover art for "${bookTitle}", artistic, minimal text, 4k.` }] },
@@ -115,8 +124,6 @@ export const generateCoverImage = async (bookTitle: string): Promise<string> => 
 };
 
 export const detectAmbience = async (htmlContent: string): Promise<string> => {
-  if (!process.env.API_KEY) return 'none';
-  
   const parser = new DOMParser();
   const doc = parser.parseFromString(htmlContent, 'text/html');
   const text = (doc.body.textContent || "").substring(0, 2000); 
@@ -138,6 +145,7 @@ export const detectAmbience = async (htmlContent: string): Promise<string> => {
   `;
 
   try {
+    const ai = getAIClient();
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
