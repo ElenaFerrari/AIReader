@@ -2,7 +2,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Library from './components/Library';
 import Player from './components/Player';
-import { Book, ViewState, AudioState, AppSettings, BookSettings } from './types';
+import Login from './components/Login';
+import { Book, ViewState, AudioState, AppSettings, User } from './types';
 import { parseFile, chunkText } from './services/parser';
 import { generateSpeechForChunk, getAudioContext, generateCoverImage, detectAmbience } from './services/geminiService';
 import { speakSystem, stopSystem } from './services/systemTTS';
@@ -14,7 +15,9 @@ const DEFAULT_GLOBAL_SETTINGS: AppSettings = {
   fontSize: 18,
   defaultVoice: 'Kore',
   defaultSpeed: 1.0,
-  engine: 'gemini' 
+  engine: 'gemini',
+  backupProvider: 'google',
+  customPresets: [] // Inizializza array vuoto
 };
 
 // Mappa URL suoni predefiniti
@@ -28,18 +31,22 @@ const AMBIENCE_PRESETS: Record<string, string> = {
 };
 
 const App: React.FC = () => {
-  const [view, setView] = useState<ViewState>(ViewState.LIBRARY);
+  const [user, setUser] = useState<User | null>(null);
+  const [view, setView] = useState<ViewState>(ViewState.LOGIN); // Start at LOGIN
+  
   const [books, setBooks] = useState<Book[]>([]);
   const [activeBook, setActiveBook] = useState<Book | null>(null);
   const [isProcessingFile, setIsProcessingFile] = useState(false);
   const [isGeneratingCover, setIsGeneratingCover] = useState(false);
   const [globalSettings, setGlobalSettings] = useState<AppSettings>(DEFAULT_GLOBAL_SETTINGS);
   
-  // Cache Tracking
   const [cachedKeys, setCachedKeys] = useState<Set<string>>(new Set());
   const [isDownloadingChapter, setIsDownloadingChapter] = useState(false);
   const [downloadingRange, setDownloadingRange] = useState<{start: number, end: number} | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
+
+  const [sleepTimer, setSleepTimer] = useState<{ type: 'time' | 'chapter', value: number } | null>(null);
+  const sleepTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [audioState, setAudioState] = useState<AudioState>({
     isPlaying: false,
@@ -53,8 +60,37 @@ const App: React.FC = () => {
   const audioCache = useRef<Map<string, AudioBuffer>>(new Map());
   const fetchPromises = useRef<Map<string, Promise<AudioBuffer>>>(new Map());
   
-  // Ambience Player Ref
   const ambienceRef = useRef<HTMLAudioElement | null>(null);
+  const youtubePlayerRef = useRef<any>(null); // Ref per iframe youtube
+
+  // --- AUTH CHECK ---
+  useEffect(() => {
+      const savedUser = localStorage.getItem('audiolibro_user');
+      if (savedUser) {
+          setUser(JSON.parse(savedUser));
+          setView(ViewState.LIBRARY);
+      }
+  }, []);
+
+  const handleLogin = () => {
+      // Simulazione Login Google
+      const mockUser: User = {
+          id: 'google-123456',
+          name: 'Mario Rossi',
+          email: 'mario.rossi@gmail.com',
+          avatar: 'https://ui-avatars.com/api/?name=Mario+Rossi&background=0D8ABC&color=fff',
+          isPremium: true
+      };
+      localStorage.setItem('audiolibro_user', JSON.stringify(mockUser));
+      setUser(mockUser);
+      setView(ViewState.LIBRARY);
+  };
+
+  const handleLogout = () => {
+      localStorage.removeItem('audiolibro_user');
+      setUser(null);
+      setView(ViewState.LOGIN);
+  };
 
   useEffect(() => {
     const savedBooks = localStorage.getItem('audiolibro_books');
@@ -72,55 +108,79 @@ const App: React.FC = () => {
   useEffect(() => { localStorage.setItem('audiolibro_books', JSON.stringify(books)); }, [books]);
   useEffect(() => { localStorage.setItem('audiolibro_settings', JSON.stringify(globalSettings)); }, [globalSettings]);
 
-  // --- LOGICA AMBIENCE SINCRONIZZATA ---
+  // --- SLEEP TIMER ---
   useEffect(() => {
-    if (!ambienceRef.current || !activeBook) return;
+      if (sleepTimeoutRef.current) clearTimeout(sleepTimeoutRef.current);
+      if (sleepTimer && sleepTimer.type === 'time' && audioState.isPlaying) {
+          sleepTimeoutRef.current = setTimeout(() => {
+              stopAudio();
+              setSleepTimer(null);
+          }, sleepTimer.value * 60 * 1000);
+      }
+      return () => { if (sleepTimeoutRef.current) clearTimeout(sleepTimeoutRef.current); }
+  }, [sleepTimer, audioState.isPlaying]);
 
-    const ambienceSetting = activeBook.settings?.ambience || 'none';
-    
-    // Se è una chiave preset usa quella, altrimenti usa la stringa come URL diretto
-    const targetUrl = AMBIENCE_PRESETS[ambienceSetting] !== undefined 
-        ? AMBIENCE_PRESETS[ambienceSetting] 
-        : ambienceSetting;
+  // --- LOGICA AMBIENCE IBRIDA (HTML5 Audio + YouTube) ---
+  useEffect(() => {
+    if (!activeBook) return;
 
-    const ambienceVol = activeBook.settings?.ambienceVolume ?? 0.2; // Default volume un po' più alto
+    const type = activeBook.settings?.ambienceType || 'preset';
+    const ambienceVal = activeBook.settings?.ambience || 'none';
+    const volume = activeBook.settings?.ambienceVolume ?? 0.2;
 
-    // 1. Aggiorna Volume
-    ambienceRef.current.volume = ambienceVol;
-
-    // 2. Cambio Traccia
-    const currentSrc = ambienceRef.current.getAttribute('src');
-    
-    // Logica per determinare se cambiare:
-    // Se targetUrl è vuoto ('none' preset) -> stop
-    // Se targetUrl è diverso da quello attuale -> cambia
-    const shouldChangeTrack = targetUrl !== currentSrc && !(targetUrl === '' && !currentSrc);
-
-    if (shouldChangeTrack) {
-        if (targetUrl) {
-            ambienceRef.current.src = targetUrl;
-            ambienceRef.current.load(); // Importante per ricaricare se cambia URL custom
-            if (audioState.isPlaying && !audioState.isLoading) {
-                 const playPromise = ambienceRef.current.play();
-                 if (playPromise !== undefined) playPromise.catch((e) => console.warn("Ambience play failed", e));
+    // 1. GESTIONE HTML5 AUDIO (Preset / Custom URL / Custom Playlist)
+    if (ambienceRef.current) {
+        ambienceRef.current.volume = volume;
+        
+        if (type !== 'youtube') {
+            const targetUrl = type === 'preset' ? (AMBIENCE_PRESETS[ambienceVal] || '') : ambienceVal;
+            const currentSrc = ambienceRef.current.getAttribute('src');
+            
+            if (targetUrl && targetUrl !== currentSrc) {
+                ambienceRef.current.src = targetUrl;
+                ambienceRef.current.load();
+                if (audioState.isPlaying && !audioState.isLoading) ambienceRef.current.play().catch(console.warn);
+            } else if (!targetUrl) {
+                ambienceRef.current.pause();
+                ambienceRef.current.removeAttribute('src');
+            } else if (targetUrl && audioState.isPlaying && !audioState.isLoading && ambienceRef.current.paused) {
+                ambienceRef.current.play().catch(console.warn);
+            } else if (!audioState.isPlaying) {
+                ambienceRef.current.pause();
             }
         } else {
-            ambienceRef.current.pause();
-            ambienceRef.current.removeAttribute('src'); // Pulisce src
+             // Se è youtube, stoppa HTML5
+             ambienceRef.current.pause();
         }
     }
 
-    // 3. Sincronizzazione Play/Pausa
-    if (ambienceRef.current.getAttribute('src')) {
-        if (audioState.isPlaying && !audioState.isLoading) {
-             const playPromise = ambienceRef.current.play();
-             if (playPromise !== undefined) playPromise.catch((e) => console.warn("Ambience sync play failed", e));
-        } else {
-            ambienceRef.current.pause();
+    // 2. GESTIONE YOUTUBE
+    // La logica YouTube è gestita principalmente dentro Player.tsx via props, 
+    // ma qui gestiamo lo stato globale se necessario.
+    
+  }, [activeBook?.settings?.ambience, activeBook?.settings?.ambienceType, activeBook?.settings?.ambienceVolume, audioState.isPlaying, audioState.isLoading]);
+
+
+  // --- MEDIA SESSION ---
+  useEffect(() => {
+    if ('mediaSession' in navigator && activeBook) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: activeBook.title,
+        artist: activeBook.author,
+        artwork: activeBook.coverUrl ? [{ src: activeBook.coverUrl, sizes: '512x512', type: 'image/png' }] : undefined
+      });
+      navigator.mediaSession.setActionHandler('play', () => !audioState.isPlaying && playChunk(audioState.currentChunkIndex, activeBook));
+      navigator.mediaSession.setActionHandler('pause', () => stopAudio());
+      navigator.mediaSession.setActionHandler('previoustrack', () => audioState.currentChunkIndex > 0 && playChunk(audioState.currentChunkIndex - 1, activeBook));
+      navigator.mediaSession.setActionHandler('nexttrack', () => audioState.currentChunkIndex < activeBook.chunks.length - 1 && playChunk(audioState.currentChunkIndex + 1, activeBook));
+    }
+    return () => {
+        if ('mediaSession' in navigator) {
+             // Cleanup handlers
+             ['play','pause','previoustrack','nexttrack'].forEach(a => navigator.mediaSession.setActionHandler(a as any, null));
         }
     }
-  }, [activeBook?.settings?.ambience, activeBook?.settings?.ambienceVolume, audioState.isPlaying, audioState.isLoading]);
-
+  }, [activeBook, audioState.isPlaying, audioState.currentChunkIndex]);
 
   const stopAudio = useCallback(() => {
     playbackIdRef.current += 1; 
@@ -131,9 +191,10 @@ const App: React.FC = () => {
     }
     stopSystem();
     setAudioState(prev => ({ ...prev, isPlaying: false, isLoading: false }));
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = "paused";
   }, []);
 
-  const getOrFetchAudio = async (chunkHtml: string, key: string, voice: string, speed: number): Promise<AudioBuffer> => {
+  const getOrFetchAudio = async (chunkHtml: string, key: string, voice: string, speed: number, style: string): Promise<AudioBuffer> => {
     if (audioCache.current.has(key)) return audioCache.current.get(key)!;
     
     const cachedRaw = await getAudioChunk(key);
@@ -144,7 +205,7 @@ const App: React.FC = () => {
        return buffer;
     }
 
-    const result = await generateSpeechForChunk(chunkHtml, voice, speed);
+    const result = await generateSpeechForChunk(chunkHtml, voice, speed, style);
     await saveAudioChunk(key, result.rawData); 
     setCachedKeys(prev => new Set(prev).add(key));
     audioCache.current.set(key, result.audioBuffer);
@@ -153,17 +214,16 @@ const App: React.FC = () => {
 
   const preloadNextChunk = useCallback(async (index: number, book: Book) => {
     if (globalSettings.engine !== 'gemini') return;
-
     const nextIndex = index + 1;
     if (nextIndex >= book.chunks.length) return;
-
     const voice = book.settings?.voice || globalSettings.defaultVoice;
     const speed = book.settings?.speed || globalSettings.defaultSpeed;
+    const style = book.settings?.voiceStyle || 'Narrative';
     const bookId = book.id;
-    const key = `${bookId}_${nextIndex}_${voice}_${speed}`;
+    const key = `${bookId}_${nextIndex}_${voice}_${speed}_${style}`;
 
     if (!audioCache.current.has(key) && !fetchPromises.current.has(key)) {
-      const promise = getOrFetchAudio(book.chunks[nextIndex], key, voice, speed);
+      const promise = getOrFetchAudio(book.chunks[nextIndex], key, voice, speed, style);
       fetchPromises.current.set(key, promise);
       try { await promise; } catch (e) {} finally { fetchPromises.current.delete(key); }
     }
@@ -179,17 +239,18 @@ const App: React.FC = () => {
       const total = endIndex - startIndex;
       const voice = activeBook.settings?.voice || globalSettings.defaultVoice;
       const speed = activeBook.settings?.speed || globalSettings.defaultSpeed;
+      const style = activeBook.settings?.voiceStyle || 'Narrative';
 
       try {
           for (let i = startIndex; i < endIndex; i++) {
               if (!activeBook) break;
-              const key = `${activeBook.id}_${i}_${voice}_${speed}`;
+              const key = `${activeBook.id}_${i}_${voice}_${speed}_${style}`;
               if (cachedKeys.has(key)) {
                   setDownloadProgress(Math.round(((i - startIndex + 1) / total) * 100));
                   continue;
               }
               if (!fetchPromises.current.has(key)) {
-                  const promise = getOrFetchAudio(activeBook.chunks[i], key, voice, speed);
+                  const promise = getOrFetchAudio(activeBook.chunks[i], key, voice, speed, style);
                   fetchPromises.current.set(key, promise);
                   await promise;
                   fetchPromises.current.delete(key);
@@ -210,17 +271,17 @@ const App: React.FC = () => {
 
   const handleAutoDetectAmbience = async () => {
     if (!activeBook || globalSettings.engine !== 'gemini') {
-        alert("Serve il motore Gemini per rilevare l'atmosfera.");
+        alert("Serve il motore Gemini.");
         return;
     }
     const currentText = activeBook.chunks[audioState.currentChunkIndex];
     const suggested = await detectAmbience(currentText);
     if (suggested && suggested !== 'none') {
-        const updated = { ...activeBook, settings: { ...activeBook.settings!, ambience: suggested } };
+        const updated = { ...activeBook, settings: { ...activeBook.settings!, ambience: suggested, ambienceType: 'preset' } };
         setActiveBook(updated);
         setBooks(prev => prev.map(b => b.id === activeBook.id ? updated : b));
     } else {
-        alert("Nessuna atmosfera specifica rilevata.");
+        alert("Nessuna atmosfera rilevata.");
     }
   };
 
@@ -232,9 +293,12 @@ const App: React.FC = () => {
     const currentPlaybackId = playbackIdRef.current;
     
     setAudioState(prev => ({ ...prev, currentChunkIndex: index, isLoading: true, error: null, isPlaying: true }));
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = "playing";
+
     const currentEngine = globalSettings.engine;
     const voice = book.settings?.voice || globalSettings.defaultVoice;
     const speed = book.settings?.speed || globalSettings.defaultSpeed;
+    const style = book.settings?.voiceStyle || 'Narrative';
 
     if (currentEngine === 'system') {
       try {
@@ -256,7 +320,7 @@ const App: React.FC = () => {
       if (ctx.state === 'suspended') await ctx.resume();
       
       const chunkHTML = book.chunks[index];
-      const key = `${book.id}_${index}_${voice}_${speed}`;
+      const key = `${book.id}_${index}_${voice}_${speed}_${style}`;
 
       if (currentPlaybackId !== playbackIdRef.current) return;
 
@@ -264,7 +328,7 @@ const App: React.FC = () => {
       if (fetchPromises.current.has(key)) {
         audioBuffer = await fetchPromises.current.get(key)!;
       } else {
-        const promise = getOrFetchAudio(chunkHTML, key, voice, speed);
+        const promise = getOrFetchAudio(chunkHTML, key, voice, speed, style);
         fetchPromises.current.set(key, promise);
         audioBuffer = await promise;
         fetchPromises.current.delete(key);
@@ -293,6 +357,18 @@ const App: React.FC = () => {
 
   const handleNextChunk = useCallback(() => {
     if (!activeBook) return;
+    
+    setSleepTimer(prev => {
+        if (prev && prev.type === 'chapter') {
+            const currentIdx = audioState.currentChunkIndex;
+            if (activeBook.chapterIndices.includes(currentIdx + 1)) {
+                stopAudio();
+                return null;
+            }
+        }
+        return prev;
+    });
+
     const nextIndex = audioState.currentChunkIndex + 1;
     if (nextIndex < activeBook.chunks.length) playChunk(nextIndex); else stopAudio();
   }, [activeBook, audioState.currentChunkIndex, globalSettings.engine]);
@@ -305,15 +381,13 @@ const App: React.FC = () => {
     }
   };
 
+  if (view === ViewState.LOGIN) {
+      return <Login onLogin={handleLogin} />;
+  }
+
   return (
     <>
-      <audio 
-        ref={ambienceRef} 
-        loop 
-        crossOrigin="anonymous" 
-        className="hidden" 
-        onError={(e) => console.error("Ambience Error:", e.currentTarget.error)}
-      />
+      <audio ref={ambienceRef} loop crossOrigin="anonymous" className="hidden" onError={(e) => console.error("Ambience Error:", e.currentTarget.error)} />
 
       {view === ViewState.PLAYER && activeBook ? (
         <Player 
@@ -324,6 +398,8 @@ const App: React.FC = () => {
           isDownloading={isDownloadingChapter}
           downloadingRange={downloadingRange}
           downloadProgress={downloadProgress}
+          sleepTimer={sleepTimer}
+          onSetSleepTimer={setSleepTimer}
           onDownloadChapter={handleDownloadChapter}
           onDetectAmbience={handleAutoDetectAmbience}
           onUpdateBookSettings={(s) => {
@@ -341,9 +417,11 @@ const App: React.FC = () => {
         />
       ) : (
         <Library 
+          user={user}
           books={books}
           globalSettings={globalSettings}
           onUpdateGlobalSettings={setGlobalSettings}
+          onLogout={handleLogout}
           onSelectBook={(b) => {
             stopAudio(); audioCache.current.clear(); fetchPromises.current.clear();
             setActiveBook(b); 
@@ -360,8 +438,10 @@ const App: React.FC = () => {
                 id: Date.now().toString(), title, author: 'Sconosciuto', content, chunks, chapterIndices, progressIndex: 0, lastAccessed: Date.now(), 
                 settings: { 
                   voice: globalSettings.defaultVoice, 
+                  voiceStyle: 'Narrative',
                   speed: globalSettings.defaultSpeed,
                   ambience: 'none',
+                  ambienceType: 'preset',
                   ambienceVolume: 0.2
                 } 
               }, ...prev]);

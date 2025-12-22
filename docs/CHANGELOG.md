@@ -1,6 +1,23 @@
 
 # Changelog
 
+## [1.7.0] - Cloud, YouTube & Styles Update
+### Aggiunto
+- **Login & Cloud Simulation:** Nuova schermata di Login e gestione profilo utente (simulati). Predisposizione per sincronizzazione libreria.
+- **Provider Backup:** Possibilità di scegliere tra Google Drive e OneDrive come destinazione del backup nelle impostazioni.
+- **Voice Styles:** Introdotta la "Regia AI". Ora è possibile combinare le voci (Kore, Puck, ecc.) con stili recitativi specifici:
+  - *Narrativo* (Default)
+  - *Sussurrato* (Per scene misteriose/notturne)
+  - *Energico* (Per scene d'azione)
+  - *Calmo* (Per relax/bedtime)
+  - *Profondo* (Per toni epici)
+- **YouTube Ambience:** Integrazione completa di un player YouTube nascosto. È possibile incollare link di video (es. "Lofi Hip Hop", "Rain Sounds") e usarli come sottofondo sincronizzato alla lettura.
+- **Playlist Personalizzate:** Nuova sezione nelle impostazioni per salvare e gestire i propri preset di atmosfera (Link MP3 o YouTube) con nomi personalizzati.
+
+### Modificato
+- **Player Architecture:** Aggiornato il motore audio per gestire in parallelo: TTS Audio Buffer (Voce), HTML5 Audio (MP3 Presets) e YouTube Iframe API (Video Background).
+- **Prompt Engineering:** Ottimizzati i prompt inviati a Gemini per includere le istruzioni di stile e prosodia.
+
 ## [1.6.0] - Immersive Ambience Update
 ### Aggiunto
 - **Atmosfera Sonora (Ambience):** È ora possibile riprodurre suoni di sottofondo in loop (Pioggia, Fuoco, Foresta, ecc.) durante la lettura.

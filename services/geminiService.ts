@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { decodeBase64, decodeAudioData } from "./audioUtils";
 
@@ -34,12 +33,13 @@ export interface GeneratedAudio {
 }
 
 /**
- * Genera l'audio per un frammento di testo usando una singola voce.
+ * Genera l'audio per un frammento di testo usando una singola voce e uno stile.
  */
 export const generateSpeechForChunk = async (
   htmlContent: string, 
   voice: string = 'Kore',
-  speed: number = 1.0
+  speed: number = 1.0,
+  style: string = 'Narrative' // Default style
 ): Promise<GeneratedAudio> => {
   if (!process.env.API_KEY) throw new Error("API Key missing");
 
@@ -47,18 +47,30 @@ export const generateSpeechForChunk = async (
   const doc = parser.parseFromString(htmlContent, 'text/html');
   const text = doc.body.textContent || "";
 
-  // Prompt ottimizzato per Narrazione Pura ed Espressiva
+  // Mapping degli stili in istruzioni per il prompt
+  const styleInstructions: Record<string, string> = {
+    'Narrative': 'Tono naturale, equilibrato e professionale da audiolibro classico.',
+    'Whisper': 'Tono basso, quasi sussurrato, intimo e misterioso. Perfetto per scene di tensione o notturne.',
+    'Energetic': 'Tono vivace, rapido e dinamico. Enfatizza l\'azione e l\'avventura.',
+    'Calm': 'Tono molto lento, profondo, rilassante e rassicurante. Quasi meditativo, ideale per addormentarsi.',
+    'Deep': 'Tono autorevole, profondo e solenne.'
+  };
+
+  const selectedStyleInstruction = styleInstructions[style] || styleInstructions['Narrative'];
+
+  // Prompt ottimizzato con supporto stile
   const prompt = `
     Sei un narratore di audiolibri italiano di altissimo livello.
     
-    Il tuo compito è leggere il seguente testo con intonazione naturale, calda e coinvolgente.
+    Il tuo compito è leggere il seguente testo.
     
-    LINEE GUIDA PER L'INTERPRETAZIONE:
-    1. **Ritmo e Pause:** Rispetta scrupolosamente la punteggiatura. Fai pause naturali per dare respiro alla narrazione, specialmente tra i paragrafi.
-    2. **Tono ed Emozione:** Adatta il tono all'atmosfera del testo. Se la scena è triste, rallenta leggermente ed sii più delicato. Se è concitata, aumenta leggermente il ritmo.
-    3. **Dialoghi Naturali:** Non cercare di imitare voci diverse o grottesche per i personaggi. Limitati a una leggera variazione di intonazione per far capire che è un dialogo, mantenendo la tua voce narrante come base solida.
-    4. **Chiarezza:** La dizione deve essere impeccabile.
-    5. **Nomi Stranieri e Fantasy:** Fai molta attenzione ai nomi propri non italiani. NON pronunciarli foneticamente all'italiana (es. "Michael" non deve suonare "Mikael" ma "Maicol"). Usa la pronuncia corretta della lingua originale o quella anglofona standard per i nomi fantasy, mantenendo però la cadenza italiana della frase.
+    STILE RICHIESTO: **${style}**
+    Istruzione Stile: ${selectedStyleInstruction}
+    
+    LINEE GUIDA GENERALI:
+    1. **Ritmo e Pause:** Rispetta la punteggiatura. Pause naturali.
+    2. **Dizione:** Impeccabile e chiara.
+    3. **Nomi:** Pronuncia corretta dei nomi stranieri.
     
     Leggi questo testo:
     "${text}"
@@ -94,7 +106,7 @@ export const generateCoverImage = async (bookTitle: string): Promise<string> => 
   return apiCallWithRetry(async () => {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
-      contents: { parts: [{ text: `Minimalist book cover art for "${bookTitle}", no text.` }] },
+      contents: { parts: [{ text: `High quality book cover art for "${bookTitle}", artistic, minimal text, 4k.` }] },
       config: { imageConfig: { aspectRatio: "3:4" } },
     });
     const data = response.candidates[0].content.parts.find(p => p.inlineData)?.inlineData?.data;
@@ -102,42 +114,38 @@ export const generateCoverImage = async (bookTitle: string): Promise<string> => 
   });
 };
 
-/**
- * Analizza il testo per suggerire l'ambience migliore.
- */
 export const detectAmbience = async (htmlContent: string): Promise<string> => {
   if (!process.env.API_KEY) return 'none';
   
   const parser = new DOMParser();
   const doc = parser.parseFromString(htmlContent, 'text/html');
-  const text = (doc.body.textContent || "").substring(0, 2000); // Analizza solo i primi 2000 caratteri per velocità
+  const text = (doc.body.textContent || "").substring(0, 2000); 
 
   const prompt = `
     Analizza brevemente il testo seguente e determina l'ambientazione sonora dominante.
     
     Testo: "${text}"
     
-    Scegli ESATTAMENTE UNA delle seguenti opzioni (restituisci SOLO la parola chiave):
-    - rain (se piove, c'è temporale o acqua scrosciante)
-    - fire (se c'è un camino, fuoco, o atmosfera domestica calda/invernale)
-    - forest (se si svolge nella natura, bosco, giardino, uccellini)
-    - night (se è notte, silenzio, grilli, atmosfera misteriosa)
-    - cafe (se è un luogo pubblico, urbano, folla, bar)
-    - none (se non c'è un'ambientazione chiara o è un saggio/astratto)
+    Scegli ESATTAMENTE UNA delle seguenti opzioni:
+    - rain
+    - fire
+    - forest
+    - night
+    - cafe
+    - none
     
-    Risposta (solo una parola):
+    Risposta (solo parola chiave):
   `;
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash", // Modello testuale veloce
+      model: "gemini-3-flash-preview",
       contents: prompt,
     });
     const result = response.text?.trim().toLowerCase() || 'none';
     const allowed = ['rain', 'fire', 'forest', 'night', 'cafe', 'none'];
     return allowed.includes(result) ? result : 'none';
   } catch (e) {
-    console.error("Ambience detection failed", e);
     return 'none';
   }
 };

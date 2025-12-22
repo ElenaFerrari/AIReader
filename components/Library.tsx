@@ -1,13 +1,15 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Book as BookType, AppSettings } from '../types';
-import { Book, Plus, FileText, Trash2, Sparkles, Settings, X, Wifi, Smartphone, Check, Database } from 'lucide-react';
+import { Book as BookType, AppSettings, User, AmbiencePreset } from '../types';
+import { Book, Plus, FileText, Trash2, Sparkles, Settings, X, Wifi, Smartphone, Check, Database, LogOut, Cloud, RefreshCw, HardDrive, Music, Link as LinkIcon, Youtube, ListMusic } from 'lucide-react';
 import { getCacheSizeInfo } from '../services/storage';
 
 interface LibraryProps {
+  user: User | null;
   books: BookType[];
   globalSettings: AppSettings;
   onUpdateGlobalSettings: (s: AppSettings) => void;
+  onLogout: () => void;
   onSelectBook: (book: BookType) => void;
   onImportBook: (file: File) => void;
   onDeleteBook: (id: string) => void;
@@ -24,10 +26,16 @@ const GEMINI_VOICES = [
   { id: 'Charon', name: 'Charon (N)' },
 ];
 
-const Library: React.FC<LibraryProps> = ({ books, globalSettings, onUpdateGlobalSettings, onSelectBook, onImportBook, onDeleteBook, onChangeCover, isProcessing, onClearCache }) => {
+const Library: React.FC<LibraryProps> = ({ user, books, globalSettings, onUpdateGlobalSettings, onLogout, onSelectBook, onImportBook, onDeleteBook, onChangeCover, isProcessing, onClearCache }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showGlobalSettings, setShowGlobalSettings] = useState(false);
   const [cacheInfo, setCacheInfo] = useState<string>("Calcolo...");
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success'>('idle');
+
+  // Stato per la creazione di nuovi preset
+  const [newPresetName, setNewPresetName] = useState("");
+  const [newPresetSrc, setNewPresetSrc] = useState("");
+  const [newPresetType, setNewPresetType] = useState<'custom' | 'youtube'>('custom');
 
   useEffect(() => {
     if (showGlobalSettings) {
@@ -35,16 +43,84 @@ const Library: React.FC<LibraryProps> = ({ books, globalSettings, onUpdateGlobal
     }
   }, [showGlobalSettings]);
 
+  const handleSync = () => {
+      setSyncStatus('syncing');
+      setTimeout(() => {
+          setSyncStatus('success');
+          setTimeout(() => setSyncStatus('idle'), 3000);
+      }, 2500); 
+  };
+
+  const getProviderName = () => globalSettings.backupProvider === 'onedrive' ? 'OneDrive' : 'Google Drive';
+
+  const extractYoutubeId = (url: string) => {
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[2].length === 11) ? match[2] : null;
+  };
+
+  const handleAddPreset = () => {
+      if (!newPresetName.trim() || !newPresetSrc.trim()) {
+          alert("Inserisci nome e link validi.");
+          return;
+      }
+      
+      let finalSrc = newPresetSrc;
+      if (newPresetType === 'youtube') {
+          const id = extractYoutubeId(newPresetSrc);
+          if (!id) {
+              alert("Link YouTube non valido.");
+              return;
+          }
+          finalSrc = id;
+      }
+
+      const newPreset: AmbiencePreset = {
+          id: Date.now().toString(),
+          name: newPresetName,
+          src: finalSrc,
+          type: newPresetType
+      };
+
+      const updatedPresets = [...(globalSettings.customPresets || []), newPreset];
+      onUpdateGlobalSettings({ ...globalSettings, customPresets: updatedPresets });
+      setNewPresetName("");
+      setNewPresetSrc("");
+  };
+
+  const handleDeletePreset = (id: string) => {
+      const updatedPresets = globalSettings.customPresets.filter(p => p.id !== id);
+      onUpdateGlobalSettings({ ...globalSettings, customPresets: updatedPresets });
+  };
+
   return (
     <div className="flex flex-col h-full bg-gray-50 pb-20 overflow-hidden relative">
       <header className="px-6 pt-12 pb-6 bg-white shadow-sm flex justify-between items-center sticky top-0 z-10">
         <div>
           <h1 className="text-3xl font-bold text-gray-800 tracking-tight">Libreria</h1>
-          <p className="text-gray-500 text-xs font-medium">I tuoi audiolibri AI</p>
+          {user ? (
+              <div className="flex items-center gap-2 mt-1">
+                  <div className="w-5 h-5 rounded-full overflow-hidden border border-gray-200">
+                      <img src={user.avatar} alt={user.name} className="w-full h-full object-cover"/>
+                  </div>
+                  <p className="text-gray-500 text-xs font-medium truncate max-w-[150px]">Ciao, {user.name.split(' ')[0]}</p>
+              </div>
+          ) : (
+            <p className="text-gray-500 text-xs font-medium">I tuoi audiolibri AI</p>
+          )}
         </div>
-        <button onClick={() => setShowGlobalSettings(true)} className="p-3 bg-gray-100 rounded-full text-gray-600 active:scale-90 transition-transform">
-          <Settings size={22} />
-        </button>
+        <div className="flex gap-2">
+            {user && (
+                <button onClick={handleSync} className={`p-3 bg-blue-50 rounded-full active:scale-90 transition-all flex items-center gap-2 ${syncStatus === 'syncing' ? 'w-auto' : ''}`}>
+                    <RefreshCw size={22} className={`text-blue-500 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
+                    {syncStatus === 'syncing' && <span className="text-[10px] font-bold text-blue-500 pr-2">Sync {getProviderName()}...</span>}
+                    {syncStatus === 'success' && <span className="text-[10px] font-bold text-green-500 pr-2">Backup OK</span>}
+                </button>
+            )}
+            <button onClick={() => setShowGlobalSettings(true)} className="p-3 bg-gray-100 rounded-full text-gray-600 active:scale-90 transition-transform">
+                <Settings size={22} />
+            </button>
+        </div>
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -83,6 +159,84 @@ const Library: React.FC<LibraryProps> = ({ books, globalSettings, onUpdateGlobal
             </div>
 
             <div className="space-y-8 pb-10 overflow-y-auto flex-1">
+              
+              <section className="bg-gray-50 p-6 rounded-3xl">
+                  <div className="flex items-center gap-3 mb-4">
+                      <ListMusic className="text-primary" size={20} />
+                      <h4 className="font-bold text-gray-700">Le Tue Playlist Atmosfera</h4>
+                  </div>
+                  
+                  <div className="mb-4 space-y-2">
+                     <input 
+                        type="text" 
+                        placeholder="Nome Playlist (es. Jazz Notturno)" 
+                        value={newPresetName}
+                        onChange={(e) => setNewPresetName(e.target.value)}
+                        className="w-full px-4 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-primary"
+                     />
+                     <div className="flex gap-2">
+                         <div className="flex bg-white rounded-xl border border-gray-200 p-1">
+                             <button onClick={() => setNewPresetType('custom')} className={`p-2 rounded-lg ${newPresetType === 'custom' ? 'bg-primary text-white' : 'text-gray-400'}`}><LinkIcon size={16}/></button>
+                             <button onClick={() => setNewPresetType('youtube')} className={`p-2 rounded-lg ${newPresetType === 'youtube' ? 'bg-red-500 text-white' : 'text-gray-400'}`}><Youtube size={16}/></button>
+                         </div>
+                         <input 
+                            type="text" 
+                            placeholder={newPresetType === 'youtube' ? "Link YouTube" : "Link MP3/Stream"} 
+                            value={newPresetSrc}
+                            onChange={(e) => setNewPresetSrc(e.target.value)}
+                            className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-primary"
+                         />
+                         <button onClick={handleAddPreset} className="p-2 bg-primary text-white rounded-xl"><Plus/></button>
+                     </div>
+                  </div>
+
+                  <div className="space-y-2">
+                      {globalSettings.customPresets?.length > 0 ? globalSettings.customPresets.map(preset => (
+                          <div key={preset.id} className="flex justify-between items-center bg-white p-3 rounded-xl border border-gray-100">
+                              <div className="flex items-center gap-2 overflow-hidden">
+                                  {preset.type === 'youtube' ? <Youtube size={14} className="text-red-500 shrink-0"/> : <Music size={14} className="text-blue-500 shrink-0"/>}
+                                  <span className="text-sm font-bold text-gray-700 truncate">{preset.name}</span>
+                              </div>
+                              <button onClick={() => handleDeletePreset(preset.id)} className="text-gray-300 hover:text-red-400"><Trash2 size={16}/></button>
+                          </div>
+                      )) : <p className="text-xs text-gray-400 text-center py-2">Nessuna playlist salvata.</p>}
+                  </div>
+              </section>
+
+              {user && (
+                  <section className="bg-blue-50 p-6 rounded-3xl border border-blue-100">
+                      <div className="flex items-center gap-4 mb-4">
+                          <img src={user.avatar} className="w-12 h-12 rounded-full border-2 border-white shadow-sm"/>
+                          <div>
+                              <h3 className="font-bold text-gray-800">{user.name}</h3>
+                              <p className="text-xs text-blue-500 flex items-center gap-1"><Cloud size={12}/> Account Google Connesso</p>
+                          </div>
+                      </div>
+                      
+                      <div className="bg-white/80 rounded-xl p-3 mb-4">
+                        <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest block mb-2">Provider di Backup</label>
+                        <div className="flex gap-2">
+                            <button 
+                                onClick={() => onUpdateGlobalSettings({...globalSettings, backupProvider: 'google'})}
+                                className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-2 ${globalSettings.backupProvider === 'google' ? 'bg-white border-green-500 text-green-600 shadow-sm' : 'border-transparent text-gray-400 hover:bg-white'}`}
+                            >
+                                <HardDrive size={14} /> Google Drive
+                            </button>
+                            <button 
+                                onClick={() => onUpdateGlobalSettings({...globalSettings, backupProvider: 'onedrive'})}
+                                className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-2 ${globalSettings.backupProvider === 'onedrive' ? 'bg-white border-blue-500 text-blue-600 shadow-sm' : 'border-transparent text-gray-400 hover:bg-white'}`}
+                            >
+                                <Cloud size={14} /> OneDrive
+                            </button>
+                        </div>
+                      </div>
+
+                      <button onClick={onLogout} className="w-full py-2 bg-white text-gray-600 font-bold text-xs rounded-xl shadow-sm flex items-center justify-center gap-2">
+                          <LogOut size={14}/> Disconnetti
+                      </button>
+                  </section>
+              )}
+
               <section>
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-4">Motore Audio</label>
                 <div className="grid grid-cols-2 gap-3">
