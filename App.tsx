@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Library from './components/Library';
 import Player from './components/Player';
 import Login from './components/Login';
-import { Book, ViewState, AudioState, AppSettings, User } from './types';
+import { Book, ViewState, AudioState, AppSettings, User, BookSettings } from './types';
 import { parseFile, chunkText } from './services/parser';
 import { generateSpeechForChunk, generateCoverImage, detectAmbience } from './services/geminiService';
 import { speakSystem, stopSystem } from './services/systemTTS';
@@ -293,7 +293,17 @@ const App: React.FC = () => {
     const currentText = activeBook.chunks[audioState.currentChunkIndex];
     const suggested = await detectAmbience(currentText);
     if (suggested && suggested !== 'none') {
-        const updated = { ...activeBook, settings: { ...activeBook.settings!, ambience: suggested, ambienceType: 'preset' } };
+        const currentSettings = activeBook.settings || {
+             voice: globalSettings.defaultVoice,
+             speed: globalSettings.defaultSpeed,
+             voiceStyle: 'Narrative'
+        };
+        const updatedSettings: BookSettings = { 
+             ...currentSettings, 
+             ambience: suggested, 
+             ambienceType: 'preset' 
+        };
+        const updated = { ...activeBook, settings: updatedSettings };
         setActiveBook(updated);
         setBooks(prev => prev.map(b => b.id === activeBook.id ? updated : b));
     } else {

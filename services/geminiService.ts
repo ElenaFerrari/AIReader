@@ -1,4 +1,5 @@
 
+
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { decodeBase64, decodeAudioData } from "./audioUtils";
 
@@ -118,7 +119,9 @@ export const generateCoverImage = async (bookTitle: string): Promise<string> => 
       contents: { parts: [{ text: `High quality book cover art for "${bookTitle}", artistic, minimal text, 4k.` }] },
       config: { imageConfig: { aspectRatio: "3:4" } },
     });
-    const data = response.candidates[0].content.parts.find(p => p.inlineData)?.inlineData?.data;
+    // Check di sicurezza per evitare crash se l'API non restituisce candidati (es. blocco sicurezza)
+    const data = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
+    if (!data) throw new Error("Impossibile generare copertina");
     return `data:image/png;base64,${data}`;
   });
 };

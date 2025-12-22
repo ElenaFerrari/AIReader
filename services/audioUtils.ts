@@ -1,4 +1,5 @@
 
+
 // Decodes Base64 string to Uint8Array
 export function decodeBase64(base64: string): Uint8Array {
   const binaryString = atob(base64);
@@ -79,7 +80,8 @@ export function createWavFile(audioData: Uint8Array, sampleRate: number = 24000)
   // data chunk length
   view.setUint32(40, audioData.length, true);
 
-  return new Blob([wavHeader, audioData], { type: 'audio/wav' });
+  // Forza il tipo per soddisfare TypeScript che a volte fa confusione tra Buffer/ArrayBufferLike e BlobPart
+  return new Blob([wavHeader, audioData as any], { type: 'audio/wav' });
 }
 
 function writeString(view: DataView, offset: number, string: string) {
