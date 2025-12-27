@@ -1,15 +1,10 @@
 
-
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { decodeBase64, decodeAudioData } from "./audioUtils";
 
-// Funzione helper per ottenere l'istanza AI con la chiave dinamica
+// Correct Method: The API key must be obtained exclusively from the environment variable process.env.API_KEY.
 const getAIClient = () => {
-  const storedKey = localStorage.getItem('gemini_api_key');
-  if (!storedKey) {
-    throw new Error("API_KEY_MISSING");
-  }
-  return new GoogleGenAI({ apiKey: storedKey });
+  return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
 
 let audioContext: AudioContext | null = null;
@@ -23,13 +18,10 @@ export const getAudioContext = () => {
   return audioContext;
 };
 
-async function apiCallWithRetry<T>(fn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
+async function apiCallWithRetry<T>(fn: () => Promise<T>, retries = 2, delay = 2000): Promise<T> {
   try {
     return await fn();
   } catch (error: any) {
-    // Se manca la chiave, non ritentare, lancia subito errore
-    if (error.message === "API_KEY_MISSING") throw new Error("API Key mancante. Inseriscila nelle impostazioni.");
-
     const isQuotaError = error?.message?.includes('429') || error?.status === 429;
     if (retries > 0 && isQuotaError) {
       await new Promise(resolve => setTimeout(resolve, delay));
@@ -44,9 +36,17 @@ export interface GeneratedAudio {
   rawData: Uint8Array;
 }
 
-/**
- * Genera l'audio per un frammento di testo usando una singola voce e uno stile.
- */
+// Semplice funzione di hashing per il contenuto del testo
+export function getTextHash(text: string): string {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    const char = text.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
 export const generateSpeechForChunk = async (
   htmlContent: string, 
   voice: string = 'Kore',
@@ -58,32 +58,16 @@ export const generateSpeechForChunk = async (
   const doc = parser.parseFromString(htmlContent, 'text/html');
   const text = doc.body.textContent || "";
 
-  const styleInstructions: Record<string, string> = {
-    'Narrative': 'Tono naturale, equilibrato e professionale da audiolibro classico.',
-    'Whisper': 'Tono basso, quasi sussurrato, intimo e misterioso. Perfetto per scene di tensione o notturne.',
-    'Energetic': 'Tono vivace, rapido e dinamico. Enfatizza l\'azione e l\'avventura.',
-    'Calm': 'Tono molto lento, profondo, rilassante e rassicurante. Quasi meditativo, ideale per addormentarsi.',
-    'Deep': 'Tono autorevole, profondo e solenne.'
+  const styleMap: Record<string, string> = {
+    'Narrative': 'naturale, audiolibro classico',
+    'Whisper': 'sussurrato, intimo, misterioso',
+    'Energetic': 'vivace, dinamico, veloce',
+    'Calm': 'molto lento, rilassante, rassicurante',
+    'Deep': 'solenne, profondo'
   };
 
-  const selectedStyleInstruction = styleInstructions[style] || styleInstructions['Narrative'];
-
-  const prompt = `
-    Sei un narratore di audiolibri italiano di altissimo livello.
-    
-    Il tuo compito è leggere il seguente testo.
-    
-    STILE RICHIESTO: **${style}**
-    Istruzione Stile: ${selectedStyleInstruction}
-    
-    LINEE GUIDA GENERALI:
-    1. **Ritmo e Pause:** Rispetta la punteggiatura. Pause naturali.
-    2. **Dizione:** Impeccabile e chiara.
-    3. **Nomi:** Pronuncia corretta dei nomi stranieri.
-    
-    Leggi questo testo:
-    "${text}"
-  `;
+  // Prompt compatto per risparmiare token di input
+  const prompt = `Leggi come narratore italiano professionale. Stile: ${styleMap[style] || 'naturale'}. Testo: "${text}"`;
 
   return apiCallWithRetry(async () => {
     const ai = getAIClient();
@@ -101,7 +85,7 @@ export const generateSpeechForChunk = async (
     });
 
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!base64Audio) throw new Error("Audio non generato.");
+    if (!base64Audio) throw new Error("Audio mancante.");
 
     const rawData = decodeBase64(base64Audio);
     const ctx = getAudioContext();
@@ -116,12 +100,13 @@ export const generateCoverImage = async (bookTitle: string): Promise<string> => 
     const ai = getAIClient();
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
-      contents: { parts: [{ text: `High quality book cover art for "${bookTitle}", artistic, minimal text, 4k.` }] },
+      contents: { parts: [{ text: `Book cover art: "${bookTitle}", artistic, 4k.` }] },
       config: { imageConfig: { aspectRatio: "3:4" } },
     });
-    // Check di sicurezza per evitare crash se l'API non restituisce candidati (es. blocco sicurezza)
-    const data = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
-    if (!data) throw new Error("Impossibile generare copertina");
+    // Correct Method: iterate through all parts to find the image part.
+    const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+    const data = part?.inlineData?.data;
+    if (!data) throw new Error("Errore immagine");
     return `data:image/png;base64,${data}`;
   });
 };
@@ -129,23 +114,9 @@ export const generateCoverImage = async (bookTitle: string): Promise<string> => 
 export const detectAmbience = async (htmlContent: string): Promise<string> => {
   const parser = new DOMParser();
   const doc = parser.parseFromString(htmlContent, 'text/html');
-  const text = (doc.body.textContent || "").substring(0, 2000); 
+  const text = (doc.body.textContent || "").substring(0, 1000); 
 
-  const prompt = `
-    Analizza brevemente il testo seguente e determina l'ambientazione sonora dominante.
-    
-    Testo: "${text}"
-    
-    Scegli ESATTAMENTE UNA delle seguenti opzioni:
-    - rain
-    - fire
-    - forest
-    - night
-    - cafe
-    - none
-    
-    Risposta (solo parola chiave):
-  `;
+  const prompt = `Analizza il testo e rispondi con UNA parola (rain, fire, forest, night, cafe, none): "${text}"`;
 
   try {
     const ai = getAIClient();
@@ -153,6 +124,7 @@ export const detectAmbience = async (htmlContent: string): Promise<string> => {
       model: "gemini-3-flash-preview",
       contents: prompt,
     });
+    // Correct Method: The GenerateContentResponse object features a text property.
     const result = response.text?.trim().toLowerCase() || 'none';
     const allowed = ['rain', 'fire', 'forest', 'night', 'cafe', 'none'];
     return allowed.includes(result) ? result : 'none';

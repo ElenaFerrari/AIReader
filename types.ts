@@ -1,10 +1,10 @@
 
 export interface BookSettings {
-  voice: string; // Nome voce (Gemini o Sistema)
-  voiceStyle?: string; // Nuovo: Stile della voce (Narrative, Whisper, etc)
+  voice: string; 
+  voiceStyle?: string; 
   speed: number;
-  ambience?: string; // ID preset, URL custom o YouTube ID
-  ambienceType?: 'preset' | 'custom' | 'youtube'; // Nuovo: Tipo di ambience
+  ambience?: string; 
+  ambienceType?: 'preset' | 'custom' | 'youtube'; 
   ambienceVolume?: number; 
 }
 
@@ -33,7 +33,7 @@ export interface User {
   name: string;
   email: string;
   avatar?: string;
-  isPremium: boolean; // Per simulare YouTube Premium / Credits
+  isPremium: boolean; 
 }
 
 export type AudioEngine = 'gemini' | 'system';
@@ -41,7 +41,7 @@ export type AudioEngine = 'gemini' | 'system';
 export interface AmbiencePreset {
   id: string;
   name: string;
-  src: string; // URL o YouTube ID
+  src: string; 
   type: 'custom' | 'youtube';
 }
 
@@ -51,7 +51,10 @@ export interface AppSettings {
   defaultSpeed: number;
   engine: AudioEngine; 
   backupProvider: 'google' | 'onedrive'; 
-  customPresets: AmbiencePreset[]; // Nuovo: Playlist salvate dall'utente
+  customPresets: AmbiencePreset[]; 
+  // Nuove opzioni Risparmio
+  ecoMode: boolean; // Usa TTS sistema per testi brevi
+  ecoThreshold: number; // Lunghezza max testo per ecoMode (es. 50 caratteri)
 }
 
 export enum ViewState {
