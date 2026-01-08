@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Library from './components/Library';
 import Player from './components/Player';
 import Login from './components/Login';
+import DebugMonitor from './components/DebugMonitor'; // Importato DebugMonitor
 import { Book, ViewState, AudioState, AppSettings, User, BookSettings } from './types';
 import { parseFile, chunkText } from './services/parser';
 import { generateSpeechForChunk, generateCoverImage, detectAmbience, getTextHash } from './services/geminiService';
@@ -270,6 +271,8 @@ const App: React.FC = () => {
     <>
       <audio ref={voicePlayerRef} onEnded={handleNextChunk} className="hidden" />
       <audio ref={ambienceRef} loop crossOrigin="anonymous" className="hidden" />
+      
+      <DebugMonitor />
 
       {view === ViewState.PLAYER && activeBook ? (
         <Player 

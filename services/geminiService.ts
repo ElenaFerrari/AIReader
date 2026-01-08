@@ -2,6 +2,28 @@
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { decodeBase64, decodeAudioData } from "./audioUtils";
 
+// --- DEBUG SYSTEM START ---
+type DebugStats = { requests: number; totalTokens: number; lastCost: number };
+let stats: DebugStats = { requests: 0, totalTokens: 0, lastCost: 0 };
+type Listener = (s: DebugStats) => void;
+const listeners: Set<Listener> = new Set();
+
+export const subscribeToDebugStats = (fn: Listener) => {
+  listeners.add(fn);
+  fn(stats); // Initial call
+  return () => listeners.delete(fn);
+};
+
+const updateStats = (tokens: number = 0) => {
+  stats = {
+    requests: stats.requests + 1,
+    totalTokens: stats.totalTokens + tokens,
+    lastCost: tokens
+  };
+  listeners.forEach(fn => fn(stats));
+};
+// --- DEBUG SYSTEM END ---
+
 // Correct Method: The API key must be obtained exclusively from the environment variable process.env.API_KEY.
 const getAIClient = () => {
   return new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -94,6 +116,10 @@ export const generateSpeechForChunk = async (
       },
     });
 
+    // Update debug stats
+    const tokens = response.usageMetadata?.totalTokenCount || 0;
+    updateStats(tokens);
+
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     if (!base64Audio) throw new Error("Audio mancante nella risposta API.");
 
@@ -113,6 +139,11 @@ export const generateCoverImage = async (bookTitle: string): Promise<string> => 
       contents: { parts: [{ text: `Minimalist book cover: "${bookTitle}"` }] },
       config: { imageConfig: { aspectRatio: "3:4" } },
     });
+    
+    // Update debug stats
+    const tokens = response.usageMetadata?.totalTokenCount || 0;
+    updateStats(tokens);
+
     const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
     const data = part?.inlineData?.data;
     if (!data) throw new Error("Errore immagine");
@@ -133,6 +164,11 @@ export const detectAmbience = async (htmlContent: string): Promise<string> => {
       model: "gemini-3-flash-preview",
       contents: prompt,
     });
+    
+    // Update debug stats
+    const tokens = response.usageMetadata?.totalTokenCount || 0;
+    updateStats(tokens);
+
     const result = response.text?.trim().toLowerCase() || 'none';
     const allowed = ['rain', 'fire', 'forest', 'night', 'cafe', 'none'];
     return allowed.includes(result) ? result : 'none';
