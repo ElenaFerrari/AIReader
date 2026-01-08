@@ -60,6 +60,7 @@ const Player: React.FC<PlayerProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const activeChunkRef = useRef<HTMLDivElement>(null);
   const youtubeIframeRef = useRef<HTMLIFrameElement>(null);
+  const chapterListRef = useRef<HTMLDivElement>(null);
 
   const [showSettings, setShowSettings] = useState(false);
   const [showChapters, setShowChapters] = useState(false);
@@ -78,6 +79,24 @@ const Player: React.FC<PlayerProps> = ({
       activeChunkRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }, [audioState.currentChunkIndex]);
+
+  // Auto-scroll Menu Capitoli
+  useEffect(() => {
+    if (showChapters) {
+        // Troviamo l'indice del capitolo corrente
+        const currentChapterIdx = book.chapterIndices.findIndex((startIdx, i) => {
+             const endIdx = book.chapterIndices[i+1] || book.chunks.length;
+             return audioState.currentChunkIndex >= startIdx && audioState.currentChunkIndex < endIdx;
+        });
+
+        if (currentChapterIdx !== -1) {
+            setTimeout(() => {
+                const el = document.getElementById(`chapter-item-${currentChapterIdx}`);
+                el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 100);
+        }
+    }
+  }, [showChapters, audioState.currentChunkIndex, book.chapterIndices]);
 
   useEffect(() => {
     if (showSettings && globalSettings.engine === 'system') {
@@ -310,7 +329,7 @@ const Player: React.FC<PlayerProps> = ({
                     <h3 className="text-2xl font-black text-gray-800">Indice</h3>
                     <button onClick={() => setShowChapters(false)} className="p-2 bg-gray-100 rounded-full"><X /></button>
                 </div>
-                <div className="flex-1 overflow-y-auto space-y-3">
+                <div className="flex-1 overflow-y-auto space-y-3" ref={chapterListRef}>
                     {book.chapterIndices.map((startIndex, i) => {
                         const endIndex = book.chapterIndices[i+1] || book.chunks.length;
                         const title = getChapterTitle(startIndex);
@@ -324,14 +343,23 @@ const Player: React.FC<PlayerProps> = ({
                         }
                         const isFullyCached = savedCount === total;
                         const isPartial = savedCount > 0 && !isFullyCached;
+                        const percentSaved = Math.round((savedCount / total) * 100);
                         const isDownloadingThis = isDownloading && downloadingRange?.start === startIndex;
 
                         return (
-                            <div key={i} className={`p-4 rounded-xl border flex items-center justify-between ${isCurrent ? 'border-primary bg-red-50' : 'border-gray-100'}`}>
+                            <div key={i} id={`chapter-item-${i}`} className={`p-4 rounded-xl border flex items-center justify-between ${isCurrent ? 'border-primary bg-red-50' : 'border-gray-100'}`}>
                                 <div className="flex-1 min-w-0 mr-4" onClick={() => { onSeekChunk(startIndex); setShowChapters(false); }}>
                                     <h4 className={`font-bold text-sm truncate ${isCurrent ? 'text-primary' : 'text-gray-700'}`}>{title}</h4>
                                     <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">
-                                        {isDownloadingThis ? <span className="text-amber-500 flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> Scaricamento... {downloadProgress}%</span> : isFullyCached ? <span className="text-green-500 flex items-center gap-1"><CheckCircle2 size={10} /> Disponibile Offline</span> : isPartial ? <span className="text-orange-400">Parzialmente salvato</span> : <span>Da scaricare</span>}
+                                        {isDownloadingThis ? (
+                                            <span className="text-amber-500 flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> Scaricamento... {downloadProgress}%</span>
+                                        ) : isFullyCached ? (
+                                            <span className="text-green-500 flex items-center gap-1"><CheckCircle2 size={10} /> Scaricato (100%)</span>
+                                        ) : isPartial ? (
+                                            <span className="text-orange-400">Scaricato {percentSaved}%</span>
+                                        ) : (
+                                            <span>Da scaricare</span>
+                                        )}
                                     </p>
                                 </div>
                                 <div className="flex items-center gap-1">
