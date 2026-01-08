@@ -152,6 +152,10 @@ const Player: React.FC<PlayerProps> = ({
       return text || `Capitolo ${index + 1}`;
   }
 
+  // Calculate current chapter title for display
+  const currentChapterStartIndex = book.chapterIndices.filter(i => i <= audioState.currentChunkIndex).pop() || 0;
+  const currentChapterTitle = getChapterTitle(currentChapterStartIndex);
+
   const handleExportChapter = async () => {
     if (globalSettings.engine !== 'gemini') {
         alert("Disponibile solo con motore Gemini.");
@@ -508,7 +512,13 @@ const Player: React.FC<PlayerProps> = ({
         </div>
       )}
 
-      <div className="absolute bottom-0 left-0 right-0 bg-white/95 backdrop-blur-lg border-t border-gray-100 px-6 py-8 pb-10 rounded-t-[3rem] shadow-2xl z-40">
+      <div className="absolute bottom-0 left-0 right-0 bg-white/95 backdrop-blur-lg border-t border-gray-100 px-6 py-6 pb-10 rounded-t-[3rem] shadow-2xl z-40">
+        
+        {/* Capitolo corrente nel player */}
+        <div className="flex justify-center mb-4">
+             <p className="text-xs font-bold text-primary bg-primary/10 px-3 py-1 rounded-full truncate max-w-[200px]">{currentChapterTitle}</p>
+        </div>
+
         <div className="flex items-center justify-between max-w-lg mx-auto">
           <button onClick={() => { const prev = book.chapterIndices?.filter(idx => idx < audioState.currentChunkIndex); onSeekChunk(prev && prev.length > 0 ? prev[prev.length - 1] : 0); }} className="p-3 text-gray-200 hover:text-gray-400 active:scale-90 transition-all"><ChevronsLeft size={28} /></button>
           <button onClick={onPrevChunk} className="p-3 text-gray-200 hover:text-gray-900 active:scale-90 transition-all"><SkipBack size={32} fill="currentColor" /></button>

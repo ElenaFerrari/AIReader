@@ -9,7 +9,7 @@ import { generateSpeechForChunk, generateCoverImage, detectAmbience, getTextHash
 import { speakSystem, stopSystem } from './services/systemTTS';
 import { saveAudioChunk, getAudioChunk, clearAudioCache, getAllStoredKeys, requestPersistentStorage } from './services/storage';
 import { createWavFile } from './services/audioUtils';
-import { Loader2, Palette, AlertCircle, X } from 'lucide-react';
+import { Loader2, Palette, AlertCircle, X, WifiOff } from 'lucide-react';
 
 const DEFAULT_GLOBAL_SETTINGS: AppSettings = {
   fontSize: 18,
@@ -19,7 +19,7 @@ const DEFAULT_GLOBAL_SETTINGS: AppSettings = {
   backupProvider: 'google',
   customPresets: [],
   ecoMode: true,
-  ecoThreshold: 60
+  ecoThreshold: 80 // Aumentato threshold per risparmiare più chiamate su frasi brevi
 };
 
 const AMBIENCE_PRESETS: Record<string, string> = {
@@ -32,7 +32,6 @@ const AMBIENCE_PRESETS: Record<string, string> = {
 };
 
 const App: React.FC = () => {
-  // Correct Method: Start directly from the Library since API key is handled externally via process.env.API_KEY.
   const [user, setUser] = useState<User | null>({ id: 'local', name: 'Lettore', email: 'local@device', avatar: 'https://ui-avatars.com/api/?name=L', isPremium: true });
   const [view, setView] = useState<ViewState>(ViewState.LIBRARY);
   
@@ -74,7 +73,6 @@ const App: React.FC = () => {
   }, []);
 
   const handleLogout = () => {
-      // Simplistic reset since API key is not managed by the app UI anymore.
       if(confirm("Vuoi uscire?")) {
           setBooks([]);
           setActiveBook(null);
@@ -128,11 +126,9 @@ const App: React.FC = () => {
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = "paused";
   }, []);
 
-  // --- CONTENT-BASED CACHE KEY ---
   const getChunkKey = (bookId: string, chunkHtml: string, voice: string, speed: number, style: string) => {
       const text = new DOMParser().parseFromString(chunkHtml, 'text/html').body.textContent || "";
       const hash = getTextHash(text);
-      // La chiave è basata sul CONTENUTO, Voce e Stile. Ignoriamo l'indice del chunk per massima riusabilità.
       return `v2_${hash}_${voice}_${speed}_${style}`;
   };
 
@@ -159,7 +155,6 @@ const App: React.FC = () => {
               if (!activeBook) break;
               const text = new DOMParser().parseFromString(activeBook.chunks[i], 'text/html').body.textContent || "";
               
-              // Ottimizzazione Eco: Non scaricare testi che verranno letti dal sistema
               if (globalSettings.ecoMode && text.length < globalSettings.ecoThreshold) {
                   setDownloadProgress(Math.round(((i - startIndex + 1) / total) * 100));
                   continue;
@@ -175,9 +170,16 @@ const App: React.FC = () => {
               await promise;
               fetchPromises.current.delete(key);
               setDownloadProgress(Math.round(((i - startIndex + 1) / total) * 100));
-              await new Promise(r => setTimeout(r, 300)); 
+              // AUMENTATO A 1000ms per evitare Rate Limiting (RPM) durante i download massivi
+              await new Promise(r => setTimeout(r, 1000)); 
           }
-      } catch (e) { alert("Errore download."); } finally {
+      } catch (e: any) { 
+          if(e.message === 'QUOTA_EXCEEDED') {
+              alert("Crediti esauriti durante il download. Riprova domani.");
+          } else {
+              alert("Errore download: " + e.message);
+          }
+      } finally {
           setIsDownloadingChapter(false);
           setDownloadingRange(null);
           setDownloadProgress(0);
@@ -201,7 +203,6 @@ const App: React.FC = () => {
     const chunkHTML = book.chunks[index];
     const text = new DOMParser().parseFromString(chunkHTML, 'text/html').body.textContent || "";
 
-    // --- LOGICA ECO-SAVER (RISPARMIO CREDITI) ---
     const useSystemForThis = globalSettings.engine === 'system' || 
                              (globalSettings.engine === 'gemini' && globalSettings.ecoMode && text.length < globalSettings.ecoThreshold);
 
@@ -211,13 +212,12 @@ const App: React.FC = () => {
         setBooks(prev => prev.map(b => b.id === book.id ? { ...b, progressIndex: index } : b));
         speakSystem(chunkHTML, voice, speed, 
           () => { if (currentPlaybackId === playbackIdRef.current) handleNextChunk(); },
-          () => { if (currentPlaybackId === playbackIdRef.current) setAudioState(prev => ({ ...prev, isPlaying: false, error: "Errore TTS." })); }
+          () => { if (currentPlaybackId === playbackIdRef.current) setAudioState(prev => ({ ...prev, isPlaying: false, error: "Errore TTS Sistema" })); }
         );
       } catch (err) { setAudioState(prev => ({ ...prev, isPlaying: false })); }
       return;
     }
 
-    // GEMINI AI
     try {
       const key = getChunkKey(book.id, chunkHTML, voice, speed, style);
       let rawData: Uint8Array;
@@ -249,7 +249,13 @@ const App: React.FC = () => {
       }
     } catch (err: any) {
       if (currentPlaybackId === playbackIdRef.current) {
-        setAudioState(prev => ({ ...prev, isLoading: false, isPlaying: false, error: err.message }));
+        let errorMsg = "Errore generico";
+        if (err.message === "QUOTA_EXCEEDED") {
+            errorMsg = "Crediti API esauriti. Passa al motore 'Offline' nelle impostazioni.";
+        } else if (err.message.includes("Failed to fetch")) {
+            errorMsg = "Problema di connessione.";
+        }
+        setAudioState(prev => ({ ...prev, isLoading: false, isPlaying: false, error: errorMsg }));
       }
     }
   };
@@ -309,6 +315,7 @@ const App: React.FC = () => {
           onSelectBook={(b) => {
             stopAudio(); fetchPromises.current.clear();
             setActiveBook(b); 
+            // Reset state - NON parte automaticamente
             setAudioState({ isPlaying: false, isLoading: false, currentChunkIndex: b.progressIndex, error: null });
             refreshCachedKeys();
             setView(ViewState.PLAYER);
@@ -345,10 +352,13 @@ const App: React.FC = () => {
       )}
 
       {audioState.error && (
-        <div className="fixed top-20 left-6 right-6 z-[100] bg-secondary/90 backdrop-blur-md text-white p-4 rounded-3xl shadow-2xl flex items-center gap-3">
-          <AlertCircle size={20} className="text-primary animate-pulse" />
-          <p className="text-[10px] font-black uppercase tracking-widest">{audioState.error}</p>
-          <button onClick={() => setAudioState(p => ({...p, error: null}))} className="ml-auto p-1 bg-white/10 rounded-full"><X size={14}/></button>
+        <div className={`fixed top-20 left-6 right-6 z-[100] backdrop-blur-md p-4 rounded-3xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-top-4 ${audioState.error.includes("Crediti") ? 'bg-amber-900/90 text-amber-50' : 'bg-red-900/90 text-red-50'}`}>
+          {audioState.error.includes("Crediti") ? <WifiOff size={24} className="text-amber-300" /> : <AlertCircle size={24} className="text-red-300" />}
+          <div className="flex-1">
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-70 mb-0.5">Attenzione</p>
+              <p className="text-xs font-bold leading-tight">{audioState.error}</p>
+          </div>
+          <button onClick={() => setAudioState(p => ({...p, error: null}))} className="p-2 bg-white/10 rounded-full"><X size={14}/></button>
         </div>
       )}
 

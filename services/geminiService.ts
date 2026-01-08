@@ -18,12 +18,19 @@ export const getAudioContext = () => {
   return audioContext;
 };
 
-async function apiCallWithRetry<T>(fn: () => Promise<T>, retries = 2, delay = 2000): Promise<T> {
+async function apiCallWithRetry<T>(fn: () => Promise<T>, retries = 1, delay = 2000): Promise<T> {
   try {
     return await fn();
   } catch (error: any) {
-    const isQuotaError = error?.message?.includes('429') || error?.status === 429;
-    if (retries > 0 && isQuotaError) {
+    // Gestione specifica Errore Quota (429) o Resource Exhausted
+    const isQuotaError = error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('Resource has been exhausted');
+    
+    if (isQuotaError) {
+      // NON RITENTARE se i crediti sono finiti, spreca solo tempo e risorse.
+      throw new Error("QUOTA_EXCEEDED");
+    }
+
+    if (retries > 0) {
       await new Promise(resolve => setTimeout(resolve, delay));
       return apiCallWithRetry(fn, retries - 1, delay * 2);
     }
@@ -56,18 +63,21 @@ export const generateSpeechForChunk = async (
   
   const parser = new DOMParser();
   const doc = parser.parseFromString(htmlContent, 'text/html');
-  const text = doc.body.textContent || "";
+  const text = doc.body.textContent?.trim() || "";
+
+  // Ottimizzazione: Se il testo è vuoto, non chiamare l'API
+  if (!text) throw new Error("Testo vuoto");
 
   const styleMap: Record<string, string> = {
-    'Narrative': 'naturale, audiolibro classico',
-    'Whisper': 'sussurrato, intimo, misterioso',
-    'Energetic': 'vivace, dinamico, veloce',
-    'Calm': 'molto lento, rilassante, rassicurante',
-    'Deep': 'solenne, profondo'
+    'Narrative': 'narrativo',
+    'Whisper': 'sussurrato',
+    'Energetic': 'energico',
+    'Calm': 'calmo',
+    'Deep': 'profondo'
   };
 
-  // Prompt compatto per risparmiare token di input
-  const prompt = `Leggi come narratore italiano professionale. Stile: ${styleMap[style] || 'naturale'}. Testo: "${text}"`;
+  // Prompt ultra-compatto per risparmiare token di input
+  const prompt = `Leggi. Stile: ${styleMap[style] || 'naturale'}. Testo: "${text}"`;
 
   return apiCallWithRetry(async () => {
     const ai = getAIClient();
@@ -85,7 +95,7 @@ export const generateSpeechForChunk = async (
     });
 
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!base64Audio) throw new Error("Audio mancante.");
+    if (!base64Audio) throw new Error("Audio mancante nella risposta API.");
 
     const rawData = decodeBase64(base64Audio);
     const ctx = getAudioContext();
@@ -100,10 +110,9 @@ export const generateCoverImage = async (bookTitle: string): Promise<string> => 
     const ai = getAIClient();
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
-      contents: { parts: [{ text: `Book cover art: "${bookTitle}", artistic, 4k.` }] },
+      contents: { parts: [{ text: `Minimalist book cover: "${bookTitle}"` }] },
       config: { imageConfig: { aspectRatio: "3:4" } },
     });
-    // Correct Method: iterate through all parts to find the image part.
     const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
     const data = part?.inlineData?.data;
     if (!data) throw new Error("Errore immagine");
@@ -114,9 +123,9 @@ export const generateCoverImage = async (bookTitle: string): Promise<string> => 
 export const detectAmbience = async (htmlContent: string): Promise<string> => {
   const parser = new DOMParser();
   const doc = parser.parseFromString(htmlContent, 'text/html');
-  const text = (doc.body.textContent || "").substring(0, 1000); 
+  const text = (doc.body.textContent || "").substring(0, 500); // Riduciamo a 500 char per risparmiare
 
-  const prompt = `Analizza il testo e rispondi con UNA parola (rain, fire, forest, night, cafe, none): "${text}"`;
+  const prompt = `Ambience one word (rain, fire, forest, night, cafe, none): "${text}"`;
 
   try {
     const ai = getAIClient();
@@ -124,7 +133,6 @@ export const detectAmbience = async (htmlContent: string): Promise<string> => {
       model: "gemini-3-flash-preview",
       contents: prompt,
     });
-    // Correct Method: The GenerateContentResponse object features a text property.
     const result = response.text?.trim().toLowerCase() || 'none';
     const allowed = ['rain', 'fire', 'forest', 'night', 'cafe', 'none'];
     return allowed.includes(result) ? result : 'none';
